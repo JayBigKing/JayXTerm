@@ -194,7 +194,7 @@ $("#encoding-help").onclick = () => {
 };
 $("#cwd-help").onclick = () => {
   $("#help-options").hidePopover();
-  $("#cwd-dialog").showModal();
+  showCwdDialog(tabs.get(current));
 };
 for (const [menuId, buttonId, opensUp] of [
   ["#upload-options", "#upload", false],
@@ -961,6 +961,40 @@ function clearCwdQuery(tab) {
   clearTimeout(tab.cwdQuery?.timer);
   tab.cwdQuery = null;
 }
+let cwdDialogTab;
+function showCwdDialog(tab) {
+  cwdDialogTab = tab;
+  $("#cwd-dialog").showModal();
+}
+function cwdCommand(host) {
+  const report = (name) =>
+    String.raw`printf '\033]7;file://${name}%s\007' "$(command pwd -P | sed 's/%/%25/g')"`;
+  const reporter = "__jayxterm_report_cwd() { " +
+    '[ "${__jayxterm_last_cwd-}" = "$PWD" ] && return 0; ' +
+    '__jayxterm_last_cwd=$PWD; ' +
+    String.raw`printf '\033]7;file://jayxterm-shell%s\007' "` +
+    '${PWD//\\%/%25}"; };';
+  const bash = [
+    reporter,
+    "if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then",
+    "PROMPT_COMMAND+=(__jayxterm_report_cwd);",
+    'elif [[ -n "${PROMPT_COMMAND-}" ]]; then',
+    String.raw`PROMPT_COMMAND+=$'\n'__jayxterm_report_cwd;`,
+    "else PROMPT_COMMAND=__jayxterm_report_cwd; fi",
+  ].join(" ");
+  const zsh = reporter + " typeset -ga precmd_functions; precmd_functions+=(__jayxterm_report_cwd)";
+  const quote = (script) => "'" + script.replaceAll("'", "'\\''") + "'";
+  // Only install a prompt hook in the interactive shell that the user confirmed.
+  // Other shells still get the one-shot result and can use their native OSC 7.
+  return report(host) + [
+    "; case $- in *i*)",
+    'if [ -n "${BASH_VERSION-}" ]; then',
+    `if ! declare -F __jayxterm_report_cwd >/dev/null; then eval ${quote(bash)}; fi;`,
+    'elif [ -n "${ZSH_VERSION-}" ]; then',
+    `if ! typeset -f __jayxterm_report_cwd >/dev/null; then eval ${quote(zsh)}; fi;`,
+    "fi;; esac",
+  ].join(" ");
+}
 $("#sync-cwd").onclick = () => {
   const t = tabs.get(current);
   if (t?.state !== "已连接" || t.moving) {
@@ -968,12 +1002,13 @@ $("#sync-cwd").onclick = () => {
     return;
   }
   if (t.shellDirectory) loadFiles(t, t.shellDirectory);
-  else $("#cwd-dialog").showModal();
+  else if (t.cwdQuery) toast("正在等候 Shell 返回目录");
+  else showCwdDialog(t);
 };
 $("#cwd-query").onclick = () => {
   const dialog = $("#cwd-dialog");
-  const tab = tabs.get(current);
-  if (tab?.state !== "已连接" || tab.moving || tab.term.options.disableStdin) {
+  const tab = cwdDialogTab;
+  if (tab?.state !== "已连接" || tabs.get(tab.id) !== tab || tab.moving || tab.term.options.disableStdin) {
     dialog.close();
     toast("请先连接 SSH");
     return;
@@ -998,9 +1033,8 @@ $("#cwd-query").onclick = () => {
     }, 5000),
   };
   dialog.close();
-  tab.term.focus();
-  const command = String.raw`printf '\033]7;file://${host}%s\007' "$(command pwd -P | sed 's/%/%25/g')"`;
-  api.send({ type: "input", id: tab.id, data: command + "\r" });
+  if (current === tab.id && !fileWorkspaceOpen) tab.term.focus();
+  api.send({ type: "input", id: tab.id, data: cwdCommand(host) + "\r" });
 };
 $("#path-form").onsubmit = (e) => {
   e.preventDefault();

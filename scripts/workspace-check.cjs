@@ -2,6 +2,8 @@ const { BrowserWindow } = require("electron");
 const { createFixture } = require("./ssh-fixture.cjs");
 const assert = require("node:assert/strict");
 const { randomBytes } = require("node:crypto");
+const { execFileSync } = require("node:child_process");
+const path = require("node:path");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(check, message) {
   for (let i = 0; i < 100; i++) {
@@ -236,6 +238,65 @@ async function check(window, source) {
         throw new Error('Returning to terminal did not restore the terminal');
       groups[0].querySelector('.tab-select').click();
     })()`);
+    const inputCount = target.inputs.length;
+    await js(window, `(() => {
+      document.querySelector('.terminal-group:last-child .tab-select').click();
+      document.querySelector('#sync-cwd').click();
+      if (!document.querySelector('#cwd-dialog').open)
+        throw new Error('A new SSH connection must ask before installing the hook');
+      document.querySelector('#cwd-query').click();
+    })()`);
+    const received = () => Buffer.concat(target.inputs.slice(inputCount)).toString("utf8");
+    await waitFor(() => received().includes("\r"), "Directory probe did not reach the selected split");
+    const probe = received().split("\r")[0];
+    const host = /file:\/\/(jayxterm-query-[\da-f-]+)%s/.exec(probe)?.[1];
+    assert.ok(host);
+    const firstPath = "/home/jay/projects";
+    const nextPath = process.platform === "win32"
+      ? "/home/jay"
+      : path.resolve(".codex-cache/qa");
+    target.dirs.add(nextPath);
+    const stream = [...target.streams].at(-1);
+    stream.write(`\x1b]7;file://${host}${firstPath}\x07`);
+    stream.write(`\x1b]7;file://jayxterm-shell${firstPath}\x07`);
+    let reports = `\x1b]7;file://jayxterm-shell${nextPath}\x07`;
+    if (process.platform !== "win32") {
+      reports = execFileSync("/bin/bash", ["--noprofile", "--norc", "-i"], {
+        cwd: nextPath,
+        env: { ...process.env, HISTFILE: "/dev/null" },
+        input: [
+          "PROMPT_COMMAND='printf OLD_PROMPT'",
+          probe,
+          "cd ..",
+          "cd qa",
+          "exit",
+          "",
+        ].join("\n"),
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      assert.ok(reports.includes("OLD_PROMPT"), "Existing Bash prompt hook was lost");
+      assert.ok(reports.includes(`\x1b]7;file://jayxterm-shell${path.dirname(nextPath)}\x07`),
+        "Bash did not report the directory after cd");
+      assert.ok(reports.endsWith(`\x1b]7;file://jayxterm-shell${nextPath}\x07`));
+    }
+    stream.write(reports);
+    await js(window, `(() => {
+      document.querySelector('.terminal-group:first-child .tab-select').click();
+      document.querySelector('#sync-cwd').click();
+      if (document.querySelector('#cwd-dialog').open)
+        throw new Error('Switching panes discarded the first shell directory');
+      document.querySelector('.terminal-group:last-child .tab-select').click();
+    })()`);
+    await waitFor(async () => {
+      await js(window, `(() => {
+        document.querySelector('#sync-cwd').click();
+        if (document.querySelector('#cwd-dialog').open)
+          throw new Error('A reporting shell asked for another confirmation');
+      })()`);
+      return js(window, `document.querySelector('#remote-path').value === ${JSON.stringify(nextPath)}`);
+    }, "Repeated sync did not use the updated directory");
+    assert.equal(received(), probe + "\r", "Repeated sync typed another command");
     await js(
       window,
       `(() => {

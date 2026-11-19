@@ -2,6 +2,10 @@
 
 一个以 Windows x64 为目标的 SSH / SFTP 桌面客户端。MIT 许可，允许商业使用；不需要账号、云服务或 GPU 加速。已生成 Windows x64 便携版 EXE；当前版本为功能原型，尚待 Windows 实机验收。
 
+## 0.5.4 分屏目录同步
+
+「SSH 当前目录」以当前分屏的活动标签为准。Bash 和 Zsh 首次确认后会在连接中继续报告目录。Shell 自带目录报告时可直接同步，其他 Shell 仍可手动确认并查询一次。
+
 ## 0.5.3 分屏文件空间
 
 点击「文件空间」后，现有的一到四个分屏直接显示各自当前会话的远程文件。可以继续切换标签、增加分屏、编辑文件，或将文件和目录拖到其他分屏和窗口。点击「返回终端」即可回到原来的 SSH 会话，文件目录与侧栏同步。
@@ -90,7 +94,7 @@
 
 ## 直接运行便携版
 
-已生成的程序：`.codex-cache/releases/JayXTerm-0.5.3-x64-portable.exe`。将 EXE 复制到 Windows 电脑后运行，无需 Node.js。当前为未签名版本，Windows 实机尚未验收，验证情况见 `VERIFICATION.md`。
+已生成的程序：`.codex-cache/releases/JayXTerm-0.5.4-x64-portable.exe`。将 EXE 复制到 Windows 电脑后运行，无需 Node.js。当前为未签名版本，Windows 实机尚未验收，验证情况见 `VERIFICATION.md`。
 
 ## 在 Windows 启动
 
