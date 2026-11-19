@@ -1,0 +1,31 @@
+name: Windows build
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install
+        shell: pwsh
+        run: ./scripts/windows.ps1 install
+      - name: SSH and storage tests
+        shell: pwsh
+        run: ./scripts/windows.ps1 test
+      - name: Windows application smoke test
+        shell: pwsh
+        run: |
+          ./scripts/windows.ps1 smoke
+      - name: Package Windows x64
+        shell: pwsh
+        run: ./scripts/windows.ps1 package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JayXTerm-Windows-x64
+          path: .codex-cache/releases/*.exe

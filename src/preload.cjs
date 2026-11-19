@@ -1,0 +1,42 @@
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
+contextBridge.exposeInMainWorld("api", {
+  readClipboard: () => ipcRenderer.invoke("clipboard:read"),
+  writeClipboard: (text) => ipcRenderer.invoke("clipboard:write", text),
+  clipboardMenu: (s) => ipcRenderer.invoke("clipboard:menu", s),
+  windowReady: () => ipcRenderer.invoke("windows:ready"),
+  newWindow: () => ipcRenderer.invoke("windows:new"),
+  windows: () => ipcRenderer.invoke("windows:list"),
+  focusWindow: (id) => ipcRenderer.invoke("windows:focus", id),
+  moveTab: (s) => ipcRenderer.invoke("windows:move", s),
+  tabMenu: (id) => ipcRenderer.invoke("windows:tab-menu", id),
+  windowTitle: (name) => ipcRenderer.send("windows:title", name),
+  windowReply: (s) => ipcRenderer.send("window:reply", s),
+  onWindow: (callback) => {
+    const listener = (_e, m) => callback(m);
+    ipcRenderer.on("window:event", listener);
+    return () => ipcRenderer.removeListener("window:event", listener);
+  },
+  sessions: () => ipcRenderer.invoke("sessions:list"),
+  reveal: (id) => ipcRenderer.invoke("sessions:reveal", id),
+  test: (s) => ipcRenderer.invoke("ssh:test", s),
+  encoding: (s) => ipcRenderer.invoke("ssh:encoding", s),
+  save: (s) => ipcRenderer.invoke("sessions:save", s),
+  remove: (id) => ipcRenderer.invoke("sessions:delete", id),
+  connect: (s) => ipcRenderer.invoke("ssh:connect", s),
+  send: (m) => ipcRenderer.send("ssh:send", m),
+  list: (s) => ipcRenderer.invoke("sftp:list", s),
+  openRemoteEditor: (s) => ipcRenderer.invoke("editor:open", s),
+  drop: (s, files) =>
+    ipcRenderer.invoke("sftp:drop", {
+      ...s,
+      paths: Array.from(files, (file) => webUtils.getPathForFile(file)),
+    }),
+  remoteDrag: (s) => ipcRenderer.sendSync("sftp:drag-token", s),
+  relay: (s) => ipcRenderer.invoke("sftp:relay", s),
+  transfer: (s) => ipcRenderer.invoke("sftp:transfer", s),
+  onEvent: (callback) => {
+    const listener = (_e, m) => callback(m);
+    ipcRenderer.on("ssh:event", listener);
+    return () => ipcRenderer.removeListener("ssh:event", listener);
+  },
+});

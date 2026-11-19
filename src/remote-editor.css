@@ -1,0 +1,70 @@
+* { box-sizing: border-box; }
+html, body, #remote-editor { height: 100%; margin: 0; }
+body {
+  color-scheme: dark;
+  background: #15191f;
+  color: #dbe2ec;
+  font: 12px "Segoe UI", system-ui, sans-serif;
+}
+#remote-editor { display: flex; flex-direction: column; }
+.editor-top, .editor-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 10px;
+  background: #202630;
+}
+.editor-top { border-bottom: 1px solid #313b4c; min-height: 35px; }
+.editor-name {
+  padding: 5px 8px 5px 0;
+  border-bottom: 2px solid #79ddc5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-modified { color: #79ddc5; font-size: 9px; }
+.editor-save, .editor-charset {
+  border: 1px solid #3b495d;
+  border-radius: 4px;
+  padding: 3px 8px;
+  background: #252e3b;
+  color: inherit;
+  font: inherit;
+}
+.editor-save { margin-left: auto; }
+.editor-save:enabled:hover { background: #344154; }
+.editor-save:disabled { opacity: .45; }
+.editor-path, .editor-status { color: #aebacd; }
+.editor-path {
+  padding: 5px 10px;
+  border-bottom: 1px solid #2b3545;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.editor-body { display: flex; flex: 1; min-height: 0; }
+.editor-surface { flex: 1; min-width: 0; }
+.editor-map {
+  width: 104px;
+  flex: none;
+  position: relative;
+  overflow: hidden;
+  border-left: 1px solid #2b3545;
+  background: #151b24;
+  touch-action: none;
+}
+.editor-map canvas { display: block; pointer-events: none; }
+.editor-map-viewport {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  background: #8ea7c82d;
+  border: 1px solid #8ea7c85c;
+  cursor: ns-resize;
+}
+.editor-status {
+  border-top: 1px solid #313b4c;
+  min-height: 30px;
+  white-space: nowrap;
+}
+.editor-message { flex: 1; overflow: hidden; text-overflow: ellipsis; }

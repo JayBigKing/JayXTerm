@@ -1,0 +1,229 @@
+const { Client } = require("ssh2");
+const { TerminalCodec } = require("./codec.cjs");
+const crypto = require("node:crypto");
+const { transferTree, relayTree } = require("./transfers.cjs");
+const { readRemoteText, saveRemoteText } = require("./remote-text.cjs");
+const connections = new Map();
+const send = (m) => process.connected && process.send(m);
+function getSftp(connection) {
+  if (!connection?.stream) throw new Error("SSH 尚未连接");
+  if (!connection.sftpPromise) {
+    const opening = new Promise((resolve, reject) =>
+      connection.client.sftp((error, sftp) =>
+        error ? reject(error) : resolve(sftp),
+      ),
+    );
+    connection.sftpPromise = opening;
+    const reset = () => {
+      if (connection.sftpPromise === opening) connection.sftpPromise = null;
+    };
+    opening.then((sftp) => {
+      sftp.once("end", () => {
+        reset();
+        sftp.end();
+      });
+      sftp.once("close", reset);
+      sftp.on("error", reset);
+    }, reset);
+  }
+  return connection.sftpPromise;
+}
+process.on("message", async (m) => {
+  let c = connections.get(m.id);
+  try {
+    if (m.type === "connect") {
+      if (c) return;
+      c = {
+        client: new Client(),
+        pending: 0,
+        codec: new TerminalCodec(m.config.encoding),
+        size: { cols: m.cols || 100, rows: m.rows || 30 },
+      };
+      connections.set(m.id, c);
+      c.client.on("error", (e) =>
+        send({ type: "error", id: m.id, message: e.message }),
+      );
+      c.client.on("close", () => {
+        connections.delete(m.id);
+        send({ type: "closed", id: m.id });
+      });
+      c.client.on("ready", () => {
+        if (m.test) {
+          c.client.sftp((error, sftp) => {
+            send({
+              type: "test-result",
+              id: m.id,
+              result: {
+                ssh: true,
+                sftp: !error,
+                message: error
+                  ? "SSH 认证成功；SFTP 不可用：" + error.message
+                  : "SSH 认证和 SFTP 均成功",
+              },
+            });
+            sftp?.end();
+            c.client.end();
+          });
+          return;
+        }
+        c.client.shell({ term: "xterm-256color", ...c.size }, (err, stream) => {
+          if (err) {
+            send({ type: "error", id: m.id, message: err.message });
+            return c.client.end();
+          }
+          c.stream = stream;
+          // A resize can arrive while SSH is opening the shell channel.
+          stream.setWindow(c.size.rows, c.size.cols, 0, 0);
+          stream.on("data", (data) => {
+            c.pending += data.length;
+            send({
+              type: "data",
+              id: m.id,
+              data: c.codec.decode(data).toString("base64"),
+              bytes: data.length,
+            });
+            if (c.pending > 262144) stream.pause();
+          });
+          stream.on("close", () => c.client.end());
+          send({ type: "ready", id: m.id });
+        });
+      });
+      c.client.connect({
+        host: m.config.host,
+        port: m.config.port,
+        username: m.config.username,
+        password: m.password,
+        readyTimeout: 120000,
+        keepaliveInterval: 15000,
+        hostVerifier(key, callback) {
+          const fingerprint =
+            "SHA256:" +
+            crypto
+              .createHash("sha256")
+              .update(key)
+              .digest("base64")
+              .replace(/=+$/, "");
+          c.verify = callback;
+          send({ type: "hostkey", id: m.id, fingerprint });
+        },
+      });
+    } else if (m.type === "verify") {
+      c?.verify?.(m.accept);
+      if (c) c.verify = null;
+    } else if (m.type === "input") {
+      if (c?.stream) c.stream.write(c.codec.encode(m.data));
+    } else if (m.type === "freeze") {
+      if (!c?.stream) throw new Error("连接已断开");
+      c.frozen = true;
+      c.stream.pause();
+      send({ type: "result", rid: m.rid, result: true });
+    } else if (m.type === "thaw" && c) {
+      c.frozen = false;
+      if (c.pending < 65536) c.stream?.resume();
+    } else if (m.type === "encoding" && c) {
+      const tail = c.codec.setEncoding(m.encoding);
+      if (tail.length)
+        send({
+          type: "data",
+          id: m.id,
+          data: tail.toString("base64"),
+          bytes: 0,
+        });
+      send({
+        type: "result",
+        rid: m.rid,
+        result: { encoding: c.codec.encoding },
+      });
+    } else if (m.type === "resize" && c) {
+      if (
+        Number.isInteger(m.cols) &&
+        m.cols >= 2 &&
+        m.cols <= 1000 &&
+        Number.isInteger(m.rows) &&
+        m.rows >= 1 &&
+        m.rows <= 1000
+      ) {
+        c.size = { cols: m.cols, rows: m.rows };
+        c.stream?.setWindow(m.rows, m.cols, 0, 0);
+      }
+    } else if (m.type === "ack" && c) {
+      c.pending = Math.max(0, c.pending - m.bytes);
+      if (c.pending < 65536 && !c.frozen) c.stream?.resume();
+    } else if (m.type === "disconnect") c?.client.destroy();
+    else if (m.type === "sftp") {
+      const s = await getSftp(c);
+      let result;
+      if (m.action === "read-text") {
+        result = await readRemoteText(s, m.path, m.encoding);
+      } else if (m.action === "save-text") {
+        result = await saveRemoteText(s, m.path, m.text, m.version, m.sourceEncoding, m.encoding);
+      } else if (m.action === "relay") {
+        const source = await getSftp(connections.get(m.source));
+        result = await relayTree(
+          source,
+          s,
+          m.from,
+          m.path,
+          m.sameServer,
+          (progress) =>
+            send({ type: "progress", id: m.id, rid: m.rid, ...progress }),
+        );
+      } else if (m.action === "upload" || m.action === "download") {
+        if (c.transferring) throw new Error("请等待当前传输完成");
+        c.transferring = true;
+        try {
+          result = await transferTree(
+            s,
+            m.action,
+            m.local,
+            m.path,
+            (progress) =>
+              send({ type: "progress", id: m.id, rid: m.rid, ...progress }),
+          );
+        } finally {
+          c.transferring = false;
+        }
+      } else
+        result = await new Promise((resolve, reject) => {
+          const done = (e, r) => (e ? reject(e) : resolve(r));
+          if (m.action === "list")
+            s.realpath(m.path || ".", (e, real) =>
+              e
+                ? reject(e)
+                : s.readdir(real, (e, files) =>
+                    done(e, {
+                      path: real,
+                      files: files?.map((f) => ({
+                        name: f.filename,
+                        directory: f.attrs.isDirectory(),
+                        symlink: f.attrs.isSymbolicLink(),
+                        size: f.attrs.size,
+                        modified: f.attrs.mtime,
+                      })),
+                    }),
+                  ),
+            );
+          else if (m.action === "stat")
+            s.lstat(m.path, (e, attrs) =>
+              e && e.code === 2
+                ? resolve({ exists: false })
+                : done(e, { exists: true, directory: attrs?.isDirectory() }),
+            );
+          else reject(new Error("未知文件操作"));
+        });
+      send({ type: "result", rid: m.rid, result });
+    }
+  } catch (e) {
+    send({
+      type: m.rid ? "result" : "error",
+      rid: m.rid,
+      id: m.id,
+      error: e.message,
+      message: e.message,
+    });
+  }
+});
+process.on("disconnect", () => {
+  for (const c of connections.values()) c.client.destroy();
+  process.exit();
+});

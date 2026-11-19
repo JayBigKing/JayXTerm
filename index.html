@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'"
+    />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>JayXTerm</title>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <header class="brand">
+          <span class="logo">J›</span>
+          <div>JayXTerm<small>你的服务器工作台</small></div>
+          <span class="version">α</span>
+        </header>
+        <nav class="side-modes">
+          <button id="mode-sessions" class="active">▤ 会话</button
+          ><button id="mode-files">▱ 远程文件</button>
+        </nav>
+        <div id="session-panel">
+          <div class="side-title">工作空间 <span>LOCAL</span></div>
+          <div class="search">
+            <span>⌕</span
+            ><input id="search" placeholder="搜索名称、主机、分组" />
+          </div>
+          <button class="primary new-session" id="new">＋ 新建会话</button>
+          <div id="sessions" class="sessions"></div>
+        </div>
+        <aside class="files hidden" id="files-panel">
+          <div class="file-heading">
+            <strong>远程文件</strong><span id="focused-sftp">SFTP</span>
+          </div>
+          <form id="path-form" class="pathbar">
+            <button type="button" id="up" title="上一级">↑</button
+            ><input id="remote-path" value="." aria-label="远程目录" /><button
+              title="打开目录"
+            >
+              ↵
+            </button>
+          </form>
+          <div class="file-actions">
+            <button id="refresh">↻ 刷新</button>
+            <button id="upload" popovertarget="upload-options">↑ 上传 ▾</button>
+            <div
+              id="upload-options"
+              popover
+              class="action-popover"
+              aria-label="上传类型"
+            >
+              <button id="upload-file">选择文件…</button>
+              <button id="upload-directory">选择文件夹…</button>
+            </div>
+            <button id="sync-cwd" title="将远程文件面板切换到 SSH 当前目录">
+              ⇄ SSH 当前目录
+            </button>
+          </div>
+          <div id="file-list" class="file-list"></div>
+          <div id="transfer-status" class="transfer-status">
+            拖入上传 · 双击文件编辑
+          </div>
+        </aside>
+        <footer class="side-footer">
+          <span class="dot"></span>本地保存 · 无云端依赖<small
+            >Windows 优先 / 软件渲染</small
+          >
+        </footer>
+      </aside>
+      <main>
+        <header class="topbar">
+          <div>
+            <span class="muted">工作空间</span><span class="slash">/</span
+            ><strong id="workspace-title">概览</strong>
+          </div>
+          <div class="window-tools">
+            <span id="window-label" class="pill"></span
+            ><button id="new-window" title="Ctrl+Shift+N">＋ 新窗口</button
+            ><button
+              id="move-tab"
+              disabled
+              title="将当前标签移到独立窗口，保持连接"
+            >
+              ↗ 移出标签</button
+            ><button id="window-picker" title="Ctrl+Shift+O">▣ 窗口</button>
+            <button
+              id="split-add"
+              type="button"
+              disabled
+              title="增加一个分屏"
+            >
+              ＋ 分屏
+            </button>
+            <button
+              id="file-workspace-toggle"
+              type="button"
+              aria-pressed="false"
+              disabled
+            >
+              文件空间
+            </button>
+          </div>
+        </header>
+        <div id="welcome" class="welcome">
+          <div class="welcome-inner">
+            <div class="eyebrow">YOUR SERVERS. ONE WORKSPACE.</div>
+            <h1>连接，开始工作。</h1>
+            <p>终端与文件并肩，专注每一次远程操作。</p>
+            <button class="primary" id="welcome-new">
+              ＋ 添加第一台服务器
+            </button>
+            <div class="features">
+              <div>
+                <b>01</b><strong>快速进入终端</strong
+                ><span>多标签 SSH，随时切换上下文</span>
+              </div>
+              <div>
+                <b>02</b><strong>文件就在手边</strong
+                ><span>SFTP 浏览、上传和下载</span>
+              </div>
+              <div>
+                <b>03</b><strong>凭据留在本机</strong
+                ><span>使用系统加密保存会话密码</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <section id="connected" class="connected hidden">
+          <div id="terminal-area"></div>
+        </section>
+        <footer class="statusbar">
+          <span id="status">就绪</span
+          ><span
+            ><select id="terminal-encoding" aria-label="当前终端编码" disabled>
+              <option value="utf-8">UTF-8</option>
+              <option value="gbk">GBK / CP936</option></select
+            ><i>·</i> xterm-256color
+            <button id="help-menu" popovertarget="help-options">帮助 ▾</button>
+            <span
+              id="help-options"
+              popover
+              class="action-popover"
+              aria-label="帮助"
+            >
+              <button id="encoding-help">Vim 编码帮助</button>
+              <button id="cwd-help">SSH 目录同步</button>
+            </span></span
+          >
+        </footer>
+      </main>
+    </div>
+    <dialog id="editor">
+      <form id="session-form">
+        <div class="dialog-heading">
+          <div class="eyebrow">CONNECTION</div>
+          <h2 id="editor-title">新建会话</h2>
+          <p>配置一次，下次直接连接。</p>
+        </div>
+        <input type="hidden" name="id" /><label
+          >会话名称<input
+            name="name"
+            placeholder="例如：生产服务器"
+            required
+            maxlength="100"
+        /></label>
+        <div class="form-row">
+          <label
+            >主机地址<input
+              name="host"
+              placeholder="192.168.1.10"
+              required /></label
+          ><label class="port"
+            >端口<input
+              name="port"
+              value="22"
+              type="number"
+              min="1"
+              max="65535"
+              required
+          /></label>
+        </div>
+        <div class="form-row">
+          <label
+            >用户名<input
+              name="username"
+              value="root"
+              autocomplete="off"
+              required /></label
+          ><label
+            >分组<input name="group" placeholder="例如：开发环境"
+          /></label>
+        </div>
+        <label
+          >密码
+          <div class="password-field">
+            <input
+              name="password"
+              type="password"
+              autocomplete="new-password"
+              placeholder="输入连接密码"
+            /><button type="button" id="toggle-password" aria-pressed="false">
+              显示
+            </button>
+          </div></label
+        ><label
+          >终端编码<select name="encoding">
+            <option value="utf-8">UTF-8（新系统）</option>
+            <option value="gbk">GBK / CP936（旧系统）</option>
+          </select></label
+        ><label class="check"
+          ><input
+            name="remember"
+            type="checkbox"
+            checked
+          />在此电脑加密保存密码</label
+        >
+        <p class="form-note">
+          Windows 使用 DPAPI
+          加密；不上传密码。编辑时留空可保留已保存密码，取消勾选可移除。
+        </p>
+        <div class="dialog-actions">
+          <button type="button" id="test-connection">测试连接</button
+          ><button type="button" id="editor-cancel">取消</button
+          ><button class="primary" type="submit">保存会话</button>
+        </div>
+        <p id="test-status" role="status"></p>
+        <p id="form-error" class="error"></p>
+      </form>
+    </dialog>
+    <dialog id="password-dialog">
+      <form id="password-form">
+        <h2>输入连接密码</h2>
+        <p id="password-host"></p>
+        <input
+          id="connect-password"
+          type="password"
+          placeholder="密码（仅本次使用）"
+          required
+          autocomplete="off"
+        />
+        <div class="dialog-actions">
+          <button type="button" id="password-cancel">取消</button
+          ><button class="primary">连接</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="confirm-dialog">
+      <h2>删除会话？</h2>
+      <p>仅删除本机保存的会话和密码。</p>
+      <div class="dialog-actions">
+        <button id="delete-cancel">取消</button
+        ><button id="delete-confirm" class="danger">删除</button>
+      </div>
+    </dialog>
+    <dialog id="cwd-dialog">
+      <h2>同步 SSH 当前目录</h2>
+      <p>
+        请先确认终端停在空白的 Shell 提示符。点击「执行并同步」，JayXTerm
+        会在当前终端读取一次目录，并在 SFTP 中打开。
+      </p>
+      <form method="dialog" class="dialog-actions">
+        <button>取消</button>
+        <button id="cwd-query" type="button" class="primary">执行并同步</button>
+      </form>
+    </dialog>
+    <dialog id="encoding-dialog">
+      <h2>终端编码与 Vim</h2>
+      <p>
+        底部选择的是 SSH 输入和输出的编码。文件编码与终端编码可以不同；Vim 的
+        termencoding 必须与底部选择一致。
+      </p>
+      <p>终端选 GBK 时，在 Vim 中执行：</p>
+      <pre>:set encoding=utf-8 termencoding=cp936</pre>
+      <p>终端选 UTF-8 时，在 Vim 中执行：</p>
+      <pre>:set encoding=utf-8 termencoding=utf-8</pre>
+      <p>如果 GBK 文件被 Vim 误判，确认没有未保存修改后，重新按 GBK 读取：</p>
+      <pre>:edit ++enc=gbk</pre>
+      <p>
+        保存原有 GBK 文件时应保留 <code>fileencoding=cp936</code>（或
+        gbk）。编码切换只影响后续终端输出；可用 Ctrl+L 重绘。SFTP
+        始终传输原始文件字节，不转换文件内容。
+      </p>
+      <div class="dialog-actions">
+        <button id="encoding-close">知道了</button>
+      </div>
+    </dialog>
+    <dialog id="windows-dialog">
+      <h2>工作窗口</h2>
+      <p>切换窗口，或把当前连接移到另一个窗口。</p>
+      <div id="window-list"></div>
+      <div class="dialog-actions"><button id="windows-close">关闭</button></div>
+    </dialog>
+    <div id="toast" role="status"></div>
+    <script type="module" src="/src/renderer.js"></script>
+  </body>
+</html>

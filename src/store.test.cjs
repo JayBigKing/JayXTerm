@@ -1,0 +1,44 @@
+const { test } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const { validateSession, openStore } = require("./store.cjs");
+test("session validation rejects invalid connection details", () => {
+  for (const port of [0, -1, 65536, 2.5, "abc"])
+    assert.throws(() =>
+      validateSession({
+        name: "dev",
+        host: "127.0.0.1",
+        username: "user",
+        port,
+      }),
+    );
+  assert.throws(() =>
+    validateSession({ name: "dev", host: "", username: "u" }),
+  );
+  const s = validateSession({
+    name: " dev ",
+    host: "localhost",
+    username: "u",
+    port: "22",
+    password: "secret",
+  });
+  assert.equal(s.name, "dev");
+  assert.equal(s.port, 22);
+  assert.equal(s.password, undefined);
+});
+test("store persists replacement and reloads without lost fields", () => {
+  const dir = fs.mkdtempSync(path.resolve(".codex-cache/tmp/store-"));
+  try {
+    const file = path.join(dir, "sessions.json");
+    const s = openStore(file);
+    s.write({
+      sessions: [{ id: "1", password: "encrypted-value" }],
+      hosts: { host: "SHA256:test" },
+    });
+    assert.deepEqual(openStore(file).get(), s.get());
+    assert.equal(fs.existsSync(file + ".new"), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
