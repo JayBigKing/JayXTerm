@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { normalizeEncoding } = require("./codec.cjs");
 const { randomUUID } = require("node:crypto");
+const { isIPv6 } = require("node:net");
 function validateSession(s) {
   const result = {
     id: s.id || randomUUID(),
@@ -13,20 +14,23 @@ function validateSession(s) {
     encoding: normalizeEncoding(s.encoding),
   };
   if (
-    !result.name ||
     !result.host ||
     !result.username ||
     !Number.isInteger(result.port) ||
     result.port < 1 ||
     result.port > 65535
   )
-    throw new Error("请填写名称、主机、用户名和有效端口");
+    throw new Error("请填写主机、用户名和有效端口");
+  if (!result.name) {
+    const host = isIPv6(result.host) ? `[${result.host}]` : result.host;
+    result.name = `${host}:${result.port} · ${result.username}`;
+  }
   return result;
 }
-function openStore(file) {
+function openStore(file, defaults = { sessions: [], hosts: {} }) {
   let data = fs.existsSync(file)
     ? JSON.parse(fs.readFileSync(file, "utf8"))
-    : { sessions: [], hosts: {} };
+    : defaults;
   return {
     get: () => data,
     write(next) {

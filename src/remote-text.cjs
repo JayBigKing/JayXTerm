@@ -107,10 +107,14 @@ async function replace(sftp, temporary, path) {
 }
 
 const saving = new WeakMap();
-async function saveRemoteText(sftp, path, text, version, sourceEncoding, encoding) {
+async function overwriteTarget(sftp, path) {
+  const attrs = await call(sftp, "lstat", path);
+  if (!attrs.isFile()) throw new Error("强制保存只能覆盖现有的普通文件");
+  return attrs;
+}
+
+async function saveRemoteText(sftp, path, text, version, sourceEncoding, encoding, forceFormat) {
   const directory = posix.dirname(path);
-  if ((await call(sftp, "realpath", directory)) !== directory)
-    throw new Error("远程目录已更改，请重新打开文件");
   // Within an SFTP channel, serialize writes to the canonical path.
   if (saving.get(sftp)?.has(path))
     throw new Error("同一文件正在保存，请稍后重试");
@@ -119,16 +123,22 @@ async function saveRemoteText(sftp, path, text, version, sourceEncoding, encodin
   paths.add(path);
   const temporary = posix.join(directory, `.jayxterm-edit-${randomUUID()}.tmp`);
   let staged = false;
-  let phase = "检查原文件";
+  let phase = "检查远端目录";
   try {
-    const original = await snapshot(sftp, path);
-    if (original.version !== version) throw new Error("远程文件已更改，请重新打开后再保存");
+    if ((await call(sftp, "realpath", directory)) !== directory)
+      throw new Error("远程目录已更改，请重新打开文件");
+    phase = forceFormat ? "检查覆盖目标" : "检查原文件";
+    const original = forceFormat
+      ? { attrs: await overwriteTarget(sftp, path) }
+      : await snapshot(sftp, path);
+    if (!forceFormat && original.version !== version)
+      throw new Error("远程文件已更改，请重新打开后再保存");
     phase = "检查文本编码与大小";
-    const { eol, bom } = decode(original.content, sourceEncoding);
+    const { eol, bom } = forceFormat || decode(original.content, sourceEncoding);
     const restored = text.replace(/\r\n|\r|\n/g, eol);
     let content = iconv.encode(restored, encoding);
     if (iconv.decode(content, encoding, { stripBOM: false }) !== restored)
-      throw new Error("编辑内容包含当前编码无法保存的字符");
+      throw new Error("编辑内容包含当前编码无法保存的字符。请修改这些字符，或用 UTF-8 保存");
     if (bom && encoding === "utf-8") content = Buffer.concat([utf8Bom, content]);
     if (content.length > maxFileBytes) throw new Error("保存后的文件不能超过 2 MiB");
     if (binaryControls.test(restored)) throw new Error("文本含有不支持的控制字符");
@@ -152,15 +162,28 @@ async function saveRemoteText(sftp, path, text, version, sourceEncoding, encodin
     const written = await call(sftp, "lstat", temporary);
     if (written.uid !== uid || written.gid !== gid || written.mode !== mode)
       throw new Error("无法保留原文件的权限和所有者");
-    phase = "确认原文件未被改动";
-    if ((await snapshot(sftp, path)).version !== version)
+    phase = forceFormat ? "检查覆盖目标" : "确认原文件未被改动";
+    if (forceFormat) {
+      const current = await overwriteTarget(sftp, path);
+      if (current.mode !== mode || current.uid !== uid || current.gid !== gid)
+        throw new Error("远端权限或所有者在保存期间发生变化，请重试");
+    } else if ((await snapshot(sftp, path)).version !== version) {
       throw new Error("远程文件已更改，请重新打开后再保存");
+    }
     phase = "替换原文件";
     await replace(sftp, temporary, path);
     staged = false;
     return { version: revision(content, written) };
   } catch (error) {
-    throw new Error(`${phase}失败：${error.message}`, { cause: error });
+    const hints = {
+      "检查远端目录": "请确认目录仍存在且当前会话可以访问。",
+      "检查覆盖目标": "请确认远端路径仍指向可访问的普通文件。",
+      "创建同目录临时文件": "请检查远端目录写权限、磁盘空间或配额。",
+      "写入临时文件": "请检查远端磁盘空间、配额和 SSH 连接。",
+      "保留原文件权限和所有者": "请确认当前 SSH 用户有权限设置原有的文件权限和所有者。",
+      "替换原文件": "请检查远端目录权限和 SFTP 服务是否允许替换现有文件。",
+    };
+    throw new Error(`${phase}失败：${error.message}${hints[phase] ? "。 " + hints[phase] : ""}`, { cause: error });
   } finally {
     if (staged) await call(sftp, "unlink", temporary).catch(() => {});
     paths.delete(path);

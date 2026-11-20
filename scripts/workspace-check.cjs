@@ -156,6 +156,15 @@ async function check(window, source) {
       authCount,
       "Moving a tab must not reconnect",
     );
+    await waitFor(
+      () => js(window, `[...document.querySelectorAll('.terminal-pane.active')].every(pane => {
+        const viewport = pane.querySelector('.xterm').getBoundingClientRect();
+        const screen = pane.querySelector('.xterm-screen').getBoundingClientRect();
+        return screen.height > 0 && screen.bottom <= viewport.bottom + 1 &&
+          screen.right <= viewport.right + 1;
+      })`),
+      "Terminal rows and columns overflow after moving a tab into a split",
+    );
     await js(
       window,
       `document.querySelector('.terminal-group .tabs .tab-select').click()`,
@@ -175,6 +184,28 @@ async function check(window, source) {
       2,
       "Focusing a pane hid the other terminal",
     );
+    const leftDirectory = "/home/jay/当前构建";
+    const rightDirectory = "/home/jay/当前测试";
+    source.dirs.add(leftDirectory);
+    target.dirs.add(rightDirectory);
+    const leftStream = [...source.streams][0];
+    const reportDirectory = (dir) => leftStream.write("\x1b]7;file://fixture" +
+      dir.split("/").map(encodeURIComponent).join("/") + "\x07");
+    reportDirectory(leftDirectory);
+    target.directory.path = rightDirectory;
+    const beforeInput = [source.inputs.length, target.inputs.length];
+    await pause(100);
+    await js(window, "document.querySelector('#file-workspace-toggle').click()");
+    await waitFor(() => js(window,
+      `[...document.querySelectorAll('.workspace-files input')].filter(input => input.offsetWidth > 0)
+        .map(input => input.value).join('|') === ${JSON.stringify(leftDirectory + "|" + rightDirectory)}`),
+    "File space did not follow both active SSH directories");
+    assert.equal(target.directory.queries, 1, "Directory probe should run once for the non-reporting pane");
+    assert.deepEqual([source.inputs.length, target.inputs.length], beforeInput, "File space wrote to a terminal");
+    await js(window, "document.querySelector('#file-workspace-toggle').click()");
+    reportDirectory("/home/jay");
+    target.directory.path = "/home/jay";
+    await pause(100);
     await js(
       window,
       `document.querySelector('#file-workspace-toggle').click()`,
@@ -207,7 +238,7 @@ async function check(window, source) {
       () =>
         js(
           window,
-          `[...document.querySelectorAll('.workspace-files .transfer-status')].some(el=>el.textContent.startsWith('完成'))`,
+          `document.querySelector('.terminal-group:last-child .workspace-files .transfer-status').textContent.startsWith('完成')`,
         ),
       "Split-pane directory transfer failed",
     );

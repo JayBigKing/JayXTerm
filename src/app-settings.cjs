@@ -1,0 +1,199 @@
+const fs = require("node:fs");
+const path = require("node:path");
+const { createHmac, randomBytes, randomUUID } = require("node:crypto");
+const { openStore } = require("./store.cjs");
+
+const cacheFolders = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "ShaderCache"];
+const defaultBackground = "#394351";
+const validBackground = (color) => typeof color === "string" && /^#[\da-f]{6}$/i.test(color);
+const defaults = {
+  cachePath: "", pendingCache: null, cacheError: "",
+  saveHistory: false, passwordHistory: [], fileOpen: "double", workspaceBackground: null,
+};
+
+function contains(parent, child) {
+  const relative = path.relative(parent, child);
+  return !relative || (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + path.sep));
+}
+function prepareCache(destination, source) {
+  fs.mkdirSync(destination, { recursive: true });
+  if (!fs.lstatSync(destination).isDirectory())
+    throw new Error("缓存目标必须是普通文件夹");
+  fs.accessSync(destination, fs.constants.W_OK);
+  if (!source || !fs.existsSync(source)) return;
+  const origin = fs.realpathSync(source);
+  const target = fs.realpathSync(destination);
+  if (origin === target) return;
+  const directories = cacheFolders
+    .filter((name) => fs.existsSync(path.join(origin, name)))
+    .filter((name) => fs.lstatSync(path.join(origin, name)).isDirectory());
+  for (const name of directories) {
+    if (contains(path.join(origin, name), target) || contains(path.join(target, name), origin))
+      throw new Error("缓存目录不能互相包含");
+  }
+  if (!directories.length) return;
+  const staging = fs.mkdtempSync(path.join(target, ".jayxterm-migrate-"));
+  const incoming = path.join(staging, "incoming");
+  const backup = path.join(staging, "backup");
+  const replaced = [];
+  const installed = [];
+  let keepBackup = false;
+  try {
+    fs.mkdirSync(incoming);
+    fs.mkdirSync(backup);
+    for (const name of directories) {
+      fs.cpSync(path.join(origin, name), path.join(incoming, name), {
+        recursive: true,
+        filter(from) {
+          const stat = fs.lstatSync(from);
+          return stat.isDirectory() || stat.isFile();
+        },
+      });
+    }
+    // Preserve each index and its data files as a unit across cache locations.
+    for (const name of directories) {
+      const to = path.join(target, name);
+      const existing = fs.lstatSync(to, { throwIfNoEntry: false });
+      if (existing) {
+        if (!existing.isDirectory()) throw new Error("目标缓存中存在同名文件或链接");
+        fs.renameSync(to, path.join(backup, name));
+        replaced.push(name);
+      }
+      fs.renameSync(path.join(incoming, name), to);
+      installed.push(name);
+    }
+  } catch (error) {
+    try {
+      for (const name of installed) fs.rmSync(path.join(target, name), { recursive: true });
+      for (const name of replaced) fs.renameSync(path.join(backup, name), path.join(target, name));
+    } catch {
+      keepBackup = true;
+    }
+    throw error;
+  } finally {
+    if (!keepBackup) fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+function mask(secret) {
+  const chars = Array.from(secret);
+  if (chars.length <= 6) return "*".repeat(Math.max(3, chars.length));
+  return chars.slice(0, 2).join("") + "*".repeat(Math.min(chars.length - 4, 12)) + chars.slice(-2).join("");
+}
+
+function openAppSettings(file, defaultCache, safeStorage) {
+  const store = openStore(file, defaults);
+  const key = randomBytes(32);
+  let index;
+  const fingerprint = (secret) => createHmac("sha256", key).update(secret).digest("hex");
+  const decrypt = ({ encrypted }) => safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+  function settings() {
+    const { backgroundColor: previousBackground, ...saved } = store.get();
+    const data = { ...defaults, ...saved };
+    // Earlier releases persisted the default whenever any setting was saved.
+    if (!Object.hasOwn(saved, "workspaceBackground") && validBackground(previousBackground) &&
+        previousBackground.toLowerCase() !== "#eff1f5")
+      data.workspaceBackground = previousBackground;
+    return data;
+  }
+  const resolveCache = (directory) => directory || defaultCache;
+  function available() {
+    return safeStorage.isEncryptionAvailable() &&
+      !(process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text");
+  }
+  function historyIndex(data) {
+    if (index) return index;
+    index = { keys: new Set(), labels: [] };
+    for (const item of data.passwordHistory) {
+      try {
+        const secret = decrypt(item);
+        index.keys.add(fingerprint(secret));
+        index.labels.push({ id: item.id, label: mask(secret) });
+      } catch {
+        // Credentials from a different OS account are unavailable on this one.
+      }
+    }
+    return index;
+  }
+  return {
+    initializeCache() {
+      const data = settings();
+      if (data.pendingCache) {
+        const { path: next, migrate } = data.pendingCache;
+        try {
+          prepareCache(resolveCache(next), migrate ? resolveCache(data.cachePath) : null);
+          data.cachePath = next;
+          data.cacheError = "";
+        } catch {
+          data.cacheError = "缓存切换失败，已继续使用原位置。请确认目标目录存在且可写。";
+        }
+        data.pendingCache = null;
+        store.write(data);
+      }
+      if (data.cachePath) {
+        try {
+          prepareCache(resolveCache(data.cachePath));
+        } catch {
+          data.cachePath = "";
+          data.cacheError = "自定义缓存目录不可用，已切换回默认位置。";
+          store.write(data);
+        }
+      }
+      if (!data.cachePath) fs.mkdirSync(defaultCache, { recursive: true });
+      return resolveCache(data.cachePath);
+    },
+    describe() {
+      const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground } = settings();
+      return {
+        cachePath, pendingCache: pendingCache?.path ?? null, cacheError, saveHistory, fileOpen, defaultCache,
+        backgroundColor: validBackground(workspaceBackground) ? workspaceBackground : defaultBackground,
+        defaultBackground,
+      };
+    },
+    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor }) {
+      const data = settings();
+      if (saveHistory && !data.saveHistory && !available())
+        throw new Error("系统安全存储不可用，无法启用密码历史");
+      const previous = data.pendingCache?.path ?? data.cachePath;
+      if (cachePath !== previous) {
+        if (cachePath !== data.cachePath)
+          prepareCache(resolveCache(cachePath));
+        data.pendingCache = cachePath === data.cachePath ? null : { path: cachePath, migrate };
+        data.cacheError = "";
+      }
+      data.saveHistory = saveHistory;
+      if (!saveHistory) data.passwordHistory = [];
+      data.fileOpen = fileOpen;
+      if (validBackground(backgroundColor))
+        data.workspaceBackground = backgroundColor.toLowerCase() === defaultBackground ? null : backgroundColor;
+      store.write(data);
+      if (!saveHistory) index = undefined;
+      return this.describe();
+    },
+    listHistory() {
+      const data = settings();
+      return {
+        enabled: data.saveHistory,
+        items: data.saveHistory && available() ? historyIndex(data).labels : [],
+      };
+    },
+    selectPassword(id) {
+      const data = settings();
+      if (!data.saveHistory || !available()) return "";
+      const item = data.passwordHistory.find((entry) => entry.id === id);
+      return item ? decrypt(item) : "";
+    },
+    record(secret) {
+      const data = settings();
+      if (!data.saveHistory || typeof secret !== "string" || !secret || !available()) return;
+      const cached = historyIndex(data);
+      const hash = fingerprint(secret);
+      if (cached.keys.has(hash)) return;
+      const item = { id: randomUUID(), encrypted: safeStorage.encryptString(secret).toString("base64") };
+      store.write({ ...data, passwordHistory: [item, ...data.passwordHistory] });
+      cached.keys.add(hash);
+      cached.labels.unshift({ id: item.id, label: mask(secret) });
+    },
+  };
+}
+
+module.exports = { openAppSettings, validBackground };

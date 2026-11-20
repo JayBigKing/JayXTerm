@@ -5,6 +5,7 @@ function createFixture({ readline = false } = {}) {
   const sizes = [],
     inputs = [],
     streams = new Set();
+  const directory = { path: null, queries: 0 };
   let authenticated = 0;
   const files = new Map([
       ["/home/jay/README.md", Buffer.from("JayXTerm SFTP fixture\n")],
@@ -12,6 +13,7 @@ function createFixture({ readline = false } = {}) {
     dirs = new Set(["/home/jay", "/home/jay/projects"]);
   const modes = new Map();
   const modified = new Map();
+  const deniedCreates = new Set();
   const sftpChannels = new Set();
   const clients = new Set();
   const { STATUS_CODE: S } = utils.sftp;
@@ -52,6 +54,17 @@ function createFixture({ readline = false } = {}) {
                 JSON.stringify({ type: "resize", ...size }) + "\n",
               );
             accept?.();
+          });
+          session.on("exec", (accept, reject, info) => {
+            if (!info.command.includes("JAYXTERM_PTY_CWD") || !directory.path) {
+              reject();
+              return;
+            }
+            directory.queries++;
+            const stream = accept();
+            stream.write("JAYXTERM_PTY_CWD\0" + directory.path + "\0");
+            stream.exit(0);
+            stream.end();
           });
           session.on("shell", (accept) => {
             const stream = accept();
@@ -155,6 +168,8 @@ function createFixture({ readline = false } = {}) {
               s.status(id, S.OK);
             });
             s.on("OPEN", (id, p, flags, attributes) => {
+              if ((flags & 8) && deniedCreates.has(path.posix.dirname(p)))
+                return s.status(id, S.PERMISSION_DENIED);
               if ((flags & 32) && files.has(p)) return s.status(id, S.FAILURE);
               if ((flags & 8) && (!files.has(p) || (flags & 16))) {
                 files.set(p, Buffer.alloc(0));
@@ -215,11 +230,13 @@ function createFixture({ readline = false } = {}) {
     sizes,
     inputs,
     streams,
+    directory,
     get authenticated() {
       return authenticated;
     },
     files,
     dirs,
+    deniedCreates,
     async closeSftpChannels() {
       await Promise.all([...sftpChannels].map((channel) => new Promise((resolve) => {
         channel.once("close", resolve);

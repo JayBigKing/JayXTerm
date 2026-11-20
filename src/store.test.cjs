@@ -27,6 +27,17 @@ test("session validation rejects invalid connection details", () => {
   assert.equal(s.port, 22);
   assert.equal(s.password, undefined);
 });
+test("empty session names use the validated host, port and username", () => {
+  assert.equal(validateSession({
+    name: "  ", host: " 192.168.1.10 ", port: "2007", username: " root ",
+  }).name, "192.168.1.10:2007 · root");
+  assert.equal(validateSession({
+    host: "build.example.net", username: "ops",
+  }).name, "build.example.net:22 · ops");
+  assert.equal(validateSession({
+    host: "2001:db8::1", port: 2222, username: "ops",
+  }).name, "[2001:db8::1]:2222 · ops");
+});
 test("store persists replacement and reloads without lost fields", () => {
   const dir = fs.mkdtempSync(path.resolve(".codex-cache/tmp/store-"));
   try {

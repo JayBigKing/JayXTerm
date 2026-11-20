@@ -1,4 +1,3 @@
-* { box-sizing: border-box; }
 html, body, #remote-editor { height: 100%; margin: 0; }
 body {
   color-scheme: dark;
@@ -31,7 +30,9 @@ body {
   color: inherit;
   font: inherit;
 }
-.editor-save { margin-left: auto; }
+.editor-save { white-space: nowrap; }
+.editor-save:not(.editor-force-save) { margin-left: auto; }
+.editor-force-save { color: #f2c38d; }
 .editor-save:enabled:hover { background: #344154; }
 .editor-save:disabled { opacity: .45; }
 .editor-path, .editor-status { color: #aebacd; }
@@ -44,27 +45,15 @@ body {
 }
 .editor-body { display: flex; flex: 1; min-height: 0; }
 .editor-surface { flex: 1; min-width: 0; }
-.editor-map {
-  width: 104px;
-  flex: none;
-  position: relative;
-  overflow: hidden;
-  border-left: 1px solid #2b3545;
-  background: #151b24;
-  touch-action: none;
-}
-.editor-map canvas { display: block; pointer-events: none; }
-.editor-map-viewport {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  background: #8ea7c82d;
-  border: 1px solid #8ea7c85c;
-  cursor: ns-resize;
-}
 .editor-status {
   border-top: 1px solid #313b4c;
   min-height: 30px;
   white-space: nowrap;
 }
 .editor-message { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.editor-message.editor-error {
+  color: #ffb6ac;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  user-select: text;
+}

@@ -15,6 +15,13 @@ const terminalDragType = "application/x-jayxterm-terminal";
 const remoteDragType = "application/x-jayxterm-sftp";
 let focusedGroup;
 let fileWorkspaceOpen = false;
+let fileWorkspaceVersion = 0;
+let fileOpen = "double";
+let localDragAvailable = false;
+let localDragWarmed = false;
+let cacheChoice = "";
+const terminalBackground = getComputedStyle(document.documentElement).getPropertyValue("--terminal-bg").trim();
+let backgroundColor = "#394351";
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -27,6 +34,161 @@ function toast(message) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => ($("#toast").style.display = "none"), 6000);
 }
+const settingsForm = $("#settings-form");
+const backgroundInput = $("#settings-background");
+function renderBackground(color) {
+  const channels = color.slice(1).match(/../g).map((hex) => {
+    const value = Number.parseInt(hex, 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  const dark = luminance < 0.18;
+  const style = document.documentElement.style;
+  style.setProperty("--page-bg", color);
+  style.setProperty("--page-ink", luminance < 0.13 ? "#edf2f8" :
+    dark ? "#fff" : luminance < 0.24 ? "#000" : "#252b38");
+  style.setProperty("--page-muted", luminance < 0.09 ? "#bac6d4" :
+    dark ? "#fff" : luminance < 0.32 ? "#000" : "#525e6e");
+}
+function previewBackground() {
+  $("#settings-background-value").value = backgroundInput.value;
+  renderBackground(backgroundInput.value);
+}
+backgroundInput.oninput = previewBackground;
+$("#settings-default-background").onclick = () => {
+  backgroundInput.value = displayedSettings.defaultBackground;
+  previewBackground();
+};
+$("#settings-dialog").addEventListener("close", () => renderBackground(backgroundColor));
+function renderCacheChoice(settings) {
+  const field = $("#settings-cache");
+  field.value = cacheChoice || settings.defaultCache;
+  field.title = field.value;
+  const pending = cacheChoice !== settings.cachePath;
+  $("#settings-cache-note").textContent = pending
+    ? "下次启动切换至此位置。当前使用 " + (settings.cachePath || settings.defaultCache)
+    : "位置变更在下次启动时生效。";
+}
+let displayedSettings;
+function updateSettings(settings) {
+  backgroundColor = settings.backgroundColor;
+  renderBackground(backgroundColor);
+  if (fileOpen === settings.fileOpen) return;
+  fileOpen = settings.fileOpen;
+  const tab = tabs.get(current);
+  if (tab) renderSidebarFiles(tab);
+  for (const group of groups) {
+    if (!group.filePanel) continue;
+    group.filePanel.rendered = null;
+    if (fileWorkspaceOpen) renderWorkspaceFiles(group);
+  }
+}
+$("#settings-open").onclick = async () => {
+  try {
+    displayedSettings = await api.settings();
+    cacheChoice = displayedSettings.pendingCache ?? displayedSettings.cachePath;
+    settingsForm.elements.saveHistory.checked = displayedSettings.saveHistory;
+    settingsForm.elements.fileOpen.value = displayedSettings.fileOpen;
+    backgroundInput.value = displayedSettings.backgroundColor;
+    $("#settings-background-value").value = backgroundInput.value;
+    $("#settings-error").textContent = displayedSettings.cacheError;
+    renderCacheChoice(displayedSettings);
+    if (!$("#settings-dialog").open) $("#settings-dialog").showModal();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+$("#settings-choose-cache").onclick = async () => {
+  try {
+    const selected = await api.chooseCache();
+    if (selected !== null && $("#settings-dialog").open) {
+      cacheChoice = selected;
+      renderCacheChoice(displayedSettings);
+    }
+  } catch (error) {
+    $("#settings-error").textContent = error.message;
+  }
+};
+$("#settings-default-cache").onclick = () => {
+  cacheChoice = "";
+  renderCacheChoice(displayedSettings);
+};
+$("#settings-cancel").onclick = () => $("#settings-dialog").close();
+settingsForm.onsubmit = async (event) => {
+  event.preventDefault();
+  const button = $("#settings-save");
+  if (button.disabled) return;
+  button.disabled = true;
+  $("#settings-error").textContent = "";
+  try {
+    const result = await api.applySettings({
+      cachePath: cacheChoice,
+      saveHistory: settingsForm.elements.saveHistory.checked,
+      fileOpen: settingsForm.elements.fileOpen.value,
+      backgroundColor: backgroundInput.value,
+    });
+    if (!result) return;
+    updateSettings(result);
+    $("#settings-dialog").close();
+    if (result.pendingCache !== null) toast("缓存位置将在下次启动时切换");
+  } catch (error) {
+    $("#settings-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+};
+function passwordVisibility(field, button, visible) {
+  field.type = visible ? "text" : "password";
+  button.textContent = visible ? "隐藏" : "显示";
+  button.setAttribute("aria-pressed", String(visible));
+}
+function passwordHistory(dialog, select, field, toggle) {
+  let generation = 0;
+  dialog.addEventListener("close", () => {
+    generation++;
+    select.replaceChildren(new Option("无密码记录", ""));
+    select.disabled = true;
+  });
+  select.onchange = async () => {
+    const id = select.value;
+    if (!id) return;
+    const version = generation;
+    try {
+      const value = await api.historyPassword(id);
+      if (generation !== version || !dialog.open || select.value !== id) return;
+      if (value) {
+        field.value = value;
+        passwordVisibility(field, toggle, false);
+        field.focus();
+      } else toast("这条历史密码已不可用");
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      if (generation === version && select.value === id) select.value = "";
+    }
+  };
+  return async () => {
+    const version = ++generation;
+    select.disabled = true;
+    select.replaceChildren(new Option("读取历史密码…", ""));
+    try {
+      const { enabled, items } = await api.passwordHistory();
+      if (generation !== version || !dialog.open) return;
+      const label = items.length ? "选择历史密码" : enabled ? "无密码记录" : "无密码记录（未开启）";
+      select.replaceChildren(new Option(label, ""), ...items.map((item) => new Option(item.label, item.id)));
+      select.disabled = !items.length;
+    } catch {
+      if (generation === version && dialog.open)
+        select.replaceChildren(new Option("无法读取历史密码", ""));
+    }
+  };
+}
+const loadSessionHistory = passwordHistory(
+  $("#editor"), $("#session-password-history"), $("#session-form").elements.password, $("#toggle-password"),
+);
+const loadConnectHistory = passwordHistory(
+  $("#password-dialog"), $("#connect-password-history"), $("#connect-password"), $("#toggle-connect-password"),
+);
 async function openRemoteEditor(t, file) {
   if (t.state !== "已连接" || t.moving) {
     toast("请先连接 SSH");
@@ -120,9 +282,7 @@ function edit(s = {}) {
   const form = $("#session-form");
   form.reset();
   editorVersion++;
-  form.elements.password.type = "password";
-  $("#toggle-password").textContent = "显示";
-  $("#toggle-password").setAttribute("aria-pressed", "false");
+  passwordVisibility(form.elements.password, $("#toggle-password"), false);
   form.elements.encoding.value = s.encoding || "utf-8";
   $("#test-status").textContent = "";
   $("#test-connection").disabled = false;
@@ -136,15 +296,14 @@ function edit(s = {}) {
   $("#editor-title").textContent = s.id ? "编辑会话" : "新建会话";
   $("#form-error").textContent = "";
   $("#editor").showModal();
+  loadSessionHistory();
 }
 $("#toggle-password").onclick = async () => {
   const form = $("#session-form"),
     field = form.elements.password,
     button = $("#toggle-password");
   if (field.type === "text") {
-    field.type = "password";
-    button.textContent = "显示";
-    button.setAttribute("aria-pressed", "false");
+    passwordVisibility(field, button, false);
     return;
   }
   const version = editorVersion;
@@ -154,9 +313,7 @@ $("#toggle-password").onclick = async () => {
       if (version !== editorVersion || !$("#editor").open) return;
       if (!field.value) field.value = password;
     }
-    field.type = "text";
-    button.textContent = "隐藏";
-    button.setAttribute("aria-pressed", "true");
+    passwordVisibility(field, button, true);
   } catch (e) {
     $("#form-error").textContent = e.message;
   }
@@ -210,6 +367,12 @@ for (const [menuId, buttonId, opensUp] of [
     menu.style.bottom = opensUp ? `${innerHeight - bounds.top + 5}px` : "auto";
   });
 }
+$("#window-tools-options").addEventListener("beforetoggle", (event) => {
+  if (event.newState !== "open") return;
+  const bounds = $("#window-tools-menu").getBoundingClientRect();
+  event.currentTarget.style.left = bounds.left + "px";
+  event.currentTarget.style.top = bounds.bottom + 6 + "px";
+});
 $("#encoding-close").onclick = () => $("#encoding-dialog").close();
 $("#terminal-encoding").onchange = async () => {
   const t = tabs.get(current);
@@ -274,6 +437,14 @@ $("#password-dialog").addEventListener("cancel", () => {
   passwordResolve?.(null);
   passwordResolve = null;
 });
+$("#password-dialog").addEventListener("close", () => {
+  $("#connect-password").value = "";
+  passwordVisibility($("#connect-password"), $("#toggle-connect-password"), false);
+});
+$("#toggle-connect-password").onclick = () => {
+  const field = $("#connect-password");
+  passwordVisibility(field, $("#toggle-connect-password"), field.type === "password");
+};
 $("#password-cancel").onclick = () => {
   $("#password-dialog").close();
   passwordResolve?.(null);
@@ -285,6 +456,7 @@ async function connect(session) {
     $("#password-host").textContent = `${session.username}@${session.host}`;
     $("#connect-password").value = "";
     $("#password-dialog").showModal();
+    loadConnectHistory();
     password = await new Promise((r) => (passwordResolve = r));
     if (password === null) return;
   }
@@ -324,6 +496,8 @@ async function terminalClipboard(t, action) {
 }
 function createTerminal(session, id, { moving = false } = {}) {
   const pane = el("div", "terminal-pane");
+  const viewport = el("div", "terminal-viewport");
+  pane.append(viewport);
   const group = focusedGroup || addGroup();
   group.body.append(pane);
   const term = new Terminal({
@@ -333,24 +507,32 @@ function createTerminal(session, id, { moving = false } = {}) {
     scrollback: 3000,
     cursorBlink: false,
     theme: {
-      background: "#0c111a",
-      foreground: "#d7e0ed",
-      cursor: "#78e0bd",
-      selectionBackground: "#345470",
-      black: "#182330",
-      red: "#ed8291",
-      green: "#7cdbad",
-      yellow: "#e5ce8b",
-      blue: "#85b9ee",
-      magenta: "#b9a0e8",
-      cyan: "#7dd8dd",
-      white: "#d7e0ed",
+      background: terminalBackground,
+      foreground: "#e5edf7",
+      cursor: "#a0dac1",
+      selectionBackground: "#4a617f",
+      black: "#202733",
+      red: "#ed9ba1",
+      green: "#91cdb2",
+      yellow: "#debf88",
+      blue: "#91b9e7",
+      magenta: "#c5b0de",
+      cyan: "#8fcad3",
+      white: "#cfd9e6",
+      brightBlack: "#a6b5c7",
+      brightRed: "#f4a9ad",
+      brightGreen: "#a0dac1",
+      brightYellow: "#ebce9c",
+      brightBlue: "#a2cced",
+      brightMagenta: "#d6c3ed",
+      brightCyan: "#a0dbe3",
+      brightWhite: "#f3f6fa",
     },
     allowProposedApi: false,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  term.open(pane);
+  term.open(viewport);
   const tab = {
     moving,
     group,
@@ -535,6 +717,7 @@ function syncGroups() {
     if (fileWorkspaceOpen) {
       group.filePanel ??= createWorkspacePanel(group);
       renderWorkspaceFiles(group);
+      syncWorkspaceDirectory(tabs.get(group.shown));
     }
   }
   for (const tab of tabs.values())
@@ -713,6 +896,7 @@ api.onEvent((m) => {
     t.state = "已连接";
     fitTerminal(t);
     loadFiles(t, ".");
+    if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
     if (current === t.id) activate(t.id);
   } else if (m.type === "closed" || m.type === "error") {
     clearCwdQuery(t);
@@ -739,7 +923,8 @@ function remoteJoin(base, name) {
 }
 function renderSidebarFiles(tab) {
   renderFiles(tab, $("#file-list"));
-  $("#transfer-status").textContent = tab.transferStatus || "拖入上传 · 双击文件编辑";
+  $("#transfer-status").textContent = tab.transferStatus ||
+    (fileOpen === "single" ? "拖入上传 · 单击文件编辑" : "拖入上传 · 双击文件编辑");
 }
 function renderFiles(t, list) {
   highlightDropTarget(null);
@@ -761,14 +946,19 @@ function renderFiles(t, list) {
     );
     row.tabIndex = 0;
     row.setAttribute("role", "button");
+    let localGesture = false;
     if (!f.symlink) {
       row.draggable = true;
-      row.ondragstart = (event) =>
-        startRemoteDrag(event, t.id, remoteJoin(t.path, f.name));
+      row.onpointerdown = () => { localGesture = false; };
+      row.ondragstart = (event) => {
+        if (localGesture) event.preventDefault();
+        else startRemoteDrag(event, t.id, remoteJoin(t.path, f.name));
+      };
     }
+    const gesture = fileOpen === "single" && !f.symlink ? "单击" : "双击";
     row.title = f.directory
-      ? "双击进入目录；右侧 ↓ 下载整个目录"
-      : f.symlink ? "双击下载文件" : "双击编辑；右侧 ↓ 下载文件";
+      ? gesture + "进入目录；右侧 ↓ 下载整个目录"
+      : f.symlink ? "双击下载文件" : gesture + "编辑；右侧 ↓ 下载文件";
     if (f.directory) row.dataset.directory = remoteJoin(t.path, f.name);
     row.append(
       el("span", "file-icon", f.directory ? "▸" : f.symlink ? "↗" : "▫"),
@@ -782,29 +972,69 @@ function renderFiles(t, list) {
       transfer(t, "download", remoteJoin(t.path, f.name), f.directory);
     };
     row.append(download);
-    row.onclick = () => {
-      t.selected = f;
-      for (const item of list.children) item.classList.remove("selected");
-      row.classList.add("selected");
-    };
-    row.ondblclick = (event) => {
-      if (event?.target.closest("button")) return;
+    if (localDragAvailable && !f.symlink) {
+      const grip = el("button", "local-drag", "↗");
+      grip.type = "button";
+      grip.tabIndex = -1;
+      grip.title = "拖到 Windows 文件夹";
+      grip.setAttribute("aria-label", grip.title);
+      grip.onclick = (event) => event.stopPropagation();
+      grip.onpointerenter = () => {
+        if (localDragWarmed) return;
+        localDragWarmed = true;
+        api.warmLocalDrag();
+      };
+      let press;
+      grip.onpointerdown = (event) => {
+        if (event.button !== 0 || !event.isPrimary) return;
+        localGesture = true;
+        event.stopPropagation();
+        event.preventDefault();
+        grip.setPointerCapture(event.pointerId);
+        press = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      };
+      grip.onpointermove = (event) => {
+        if (!press || event.pointerId !== press.id || !(event.buttons & 1) ||
+            Math.max(Math.abs(event.clientX - press.x), Math.abs(event.clientY - press.y)) < 4) return;
+        press = null;
+        if (grip.hasPointerCapture(event.pointerId)) grip.releasePointerCapture(event.pointerId);
+        if (t.loading || t.moving || t.state !== "已连接") return;
+        api.startLocalDrag({ id: t.id, path: remoteJoin(t.path, f.name) });
+      };
+      grip.onpointerup = grip.onpointercancel = grip.onlostpointercapture = () => { press = null; };
+      grip.ondragstart = (event) => {
+        event.stopPropagation();
+        event.preventDefault();
+      };
+      row.append(grip);
+    }
+    const open = () => {
       if (f.directory) loadFiles(t, remoteJoin(t.path, f.name));
       else if (f.symlink) transfer(t, "download", remoteJoin(t.path, f.name));
       else openRemoteEditor(t, f);
     };
+    row.onclick = (event) => {
+      t.selected = f;
+      list.querySelector(".file-row.selected")?.classList.remove("selected");
+      row.classList.add("selected");
+      if (fileOpen === "single" && !f.symlink && event.detail <= 1) open();
+    };
+    row.ondblclick = (event) => {
+      if (!event.target.closest("button") && (fileOpen === "double" || f.symlink)) open();
+    };
     row.onkeydown = (e) => {
       if (e.key === "Enter" && e.target === row) {
         e.preventDefault();
-        row.ondblclick();
+        open();
       }
     };
     list.append(row);
   }
 }
-async function loadFiles(t, path) {
+async function loadFiles(t, path, { keepOnError = false } = {}) {
   const v = ++t.loadVersion;
   t.loading = true;
+  t.workspaceDirectoryNote = "";
   t.fileError = "";
   if (current === t.id) renderSidebarFiles(t);
   if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
@@ -820,8 +1050,10 @@ async function loadFiles(t, path) {
           Number(b.directory) - Number(a.directory) ||
           a.name.localeCompare(b.name),
       );
+    return true;
   } catch (e) {
     if (v !== t.loadVersion || !tabs.has(t.id)) return;
+    if (keepOnError) return false;
     t.fileError = e.message;
     t.files = [];
   } finally {
@@ -1105,7 +1337,8 @@ function renderWorkspaceFiles(group) {
   const tab = tabs.get(group.shown);
   const ready = tab?.state === "已连接" && !tab.moving;
   const previous = panel.rendered;
-  const state = { tab, ready, path: tab?.path, files: tab?.files, loading: tab?.loading, status: tab?.state };
+  const state = { tab, ready, path: tab?.path, files: tab?.files, loading: tab?.loading,
+    status: tab?.state, directoryNote: tab?.workspaceDirectoryNote };
   if (previous && Object.keys(state).every((key) => state[key] === previous[key])) return;
   panel.rendered = state;
   panel.form.classList.toggle("hidden", !ready);
@@ -1121,14 +1354,45 @@ function renderWorkspaceFiles(group) {
   }
   if (previous?.tab !== tab || previous.path !== tab.path || tab.loading)
     panel.input.value = tab.path;
-  panel.status.textContent = tab.transferStatus || "拖到其他分屏或窗口即可复制";
+  panel.status.textContent = tab.workspaceDirectoryNote || tab.transferStatus || "拖到其他分屏或窗口即可复制";
   renderFiles(tab, panel.list);
+}
+async function syncWorkspaceDirectory(tab) {
+  if (tab?.state !== "已连接" || tab.moving || tab.group.shown !== tab.id ||
+      tab.workspaceSyncVersion === fileWorkspaceVersion) return;
+  const version = fileWorkspaceVersion;
+  tab.workspaceSyncVersion = version;
+  if (tab.workspaceDirectoryNote) {
+    tab.workspaceDirectoryNote = "";
+    renderWorkspaceFiles(tab.group);
+  }
+  const stillVisible = () => fileWorkspaceOpen && fileWorkspaceVersion === version &&
+    tabs.get(tab.id) === tab && !tab.moving && tab.state === "已连接" && tab.group.shown === tab.id;
+  const listVersion = tab.loadVersion;
+  // Prefer a directory report from the interactive shell. Servers that do
+  // not report one may expose the PTY process's directory on a separate channel.
+  const directory = tab.shellDirectory || await api.shellDirectory(tab.id).catch(() => null);
+  if (!stillVisible() || listVersion !== tab.loadVersion) return;
+  const target = tab.shellDirectory || directory;
+  if (target) {
+    if (target === tab.path && !tab.loading && !tab.fileError) return;
+    const loaded = await loadFiles(tab, target, { keepOnError: true });
+    if (loaded !== false || !stillVisible() || tab.loadVersion !== listVersion + 1) return;
+    if (tab.path === ".") {
+      await loadFiles(tab, ".");
+      if (tab.loadVersion !== listVersion + 2) return;
+    }
+  }
+  if (!stillVisible()) return;
+  tab.workspaceDirectoryNote = "未能同步 SSH 当前目录，已保留原目录";
+  renderWorkspaceFiles(tab.group);
 }
 $("#file-workspace-toggle").onclick = () => {
   fileWorkspaceOpen = !fileWorkspaceOpen;
+  fileWorkspaceVersion++;
   $("#terminal-area").classList.toggle("show-file-space", fileWorkspaceOpen);
   const button = $("#file-workspace-toggle");
-  button.textContent = fileWorkspaceOpen ? "返回终端" : "文件空间";
+  button.querySelector("span").textContent = fileWorkspaceOpen ? "返回终端" : "文件空间";
   button.setAttribute("aria-pressed", String(fileWorkspaceOpen));
   highlightDropTarget(null);
   activate(current, !fileWorkspaceOpen);
@@ -1149,6 +1413,17 @@ function markMoving(t, moving) {
     $("#move-tab").disabled = moving || t.state !== "已连接";
 }
 api.onWindow(async (m) => {
+  if (m.type === "local-drag-status") {
+    const tab = tabs.get(m.id);
+    if (tab) showTransfer(tab, m.message);
+    return;
+  }
+  if (m.type === "settings-changed") {
+    updateSettings(m.settings);
+    if ($("#editor").open) loadSessionHistory();
+    if ($("#password-dialog").open) loadConnectHistory();
+    return;
+  }
   if (m.type === "remote-text-saved") {
     const tab = tabs.get(m.id);
     if (tab && tab.path === m.directory) loadFiles(tab, tab.path);
@@ -1247,8 +1522,149 @@ api.onWindow(async (m) => {
     api.windowReply({ token: m.token, error: error.message });
   }
 });
-$("#new-window").onclick = () => api.newWindow();
+$("#new-window").onclick = () => {
+  $("#window-tools-options").hidePopover();
+  api.newWindow();
+};
+const importDialog = $("#session-import-dialog");
+const importList = $("#session-import-rows");
+const importSummary = $("#session-import-summary");
+const applyImportButton = $("#session-import-apply");
+const cancelImportButton = $("#session-import-cancel");
+const importError = $("#session-import-error");
+let importPreview, importChoices;
+let exchangingSessions = false;
+function renderImportSummary() {
+  const added = importChoices.filter((choice) => choice === "add").length;
+  const skipped = importChoices.filter((choice) => choice === "skip").length;
+  const updated = importChoices.length - added - skipped;
+  importSummary.value = `新增 ${added} · 更新 ${updated} · 跳过 ${skipped}`;
+  applyImportButton.disabled = added + updated === 0;
+}
+function importRow(item, index) {
+  const row = el("div", "session-import-row");
+  row.setAttribute("role", "listitem");
+  const heading = el("div", "import-item");
+  heading.append(el("strong", "", item.name || "未命名会话"));
+  row.append(heading);
+  if (item.reason) {
+    heading.append(el("small", "", item.reason));
+    row.append(el("span", "import-skip", "跳过"));
+    return row;
+  }
+  heading.append(el("small", "", `${item.username}@${item.host}:${item.port}${item.group ? " · " + item.group : ""}`));
+  const select = el("select", "import-action");
+  select.setAttribute("aria-label", "处理会话 " + item.name);
+  const possibleMatch = item.duplicate || item.matches.length > 0;
+  select.append(new Option(possibleMatch ? "保留两条" : "新增", "add"), new Option("跳过", "skip"));
+  for (const match of item.matches) {
+    const detail = [match.group || "未分组", match.encoding?.toUpperCase() || "UTF-8",
+      match.hasPassword ? "已保存密码" : "未保存密码"].join(" · ");
+    select.append(new Option(`更新「${match.name}」 · ${detail}`, "update:" + match.id));
+  }
+  select.value = importChoices[index];
+  row.append(select);
+  if (possibleMatch) {
+    const details = el("div", "import-details");
+    const note = el("small", "", item.matches.length
+      ? "可能重复 · 已有会话使用相同主机、端口和用户名"
+      : "可能重复 · 本批次已有相同主机、端口和用户名的会话");
+    const changes = el("div", "import-changes");
+    changes.hidden = true;
+    details.append(note, changes);
+    row.append(details);
+    select.onchange = () => {
+      const match = item.matches.find(({ id }) => select.value === "update:" + id);
+      changes.hidden = !match;
+      if (match) {
+        const rows = [];
+        if (match.name !== item.name)
+          rows.push(el("div", "", `名称　${match.name} → ${item.name}`));
+        if (item.group && item.group !== match.group)
+          rows.push(el("div", "", `分组　${match.group || "未分组"} → ${item.group}`));
+        if (!rows.length) rows.push(el("div", "", "名称和分组相同"));
+        rows.push(el("small", "", "继续使用已有会话的密码和终端编码"));
+        changes.replaceChildren(...rows);
+      }
+      importChoices[index] = select.value;
+      renderImportSummary();
+    };
+  } else {
+    select.onchange = () => {
+      importChoices[index] = select.value;
+      renderImportSummary();
+    };
+  }
+  return row;
+}
+async function chooseSessionImport(format) {
+  if (exchangingSessions) return;
+  exchangingSessions = true;
+  $("#window-tools-options").hidePopover();
+  try {
+    const preview = await api.previewSessionImport(format);
+    if (!preview) return;
+    importPreview = preview;
+    importChoices = preview.rows.map((item) =>
+      item.reason || item.duplicate || item.matches.length ? "skip" : "add");
+    $("#session-import-source").textContent = (format === "xshell" ? "Xshell · " : "OpenSSH · ") + preview.file;
+    importList.replaceChildren(...preview.rows.map(importRow));
+    importError.hidden = true;
+    renderImportSummary();
+    importDialog.showModal();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    exchangingSessions = false;
+  }
+}
+$("#import-xshell").onclick = () => chooseSessionImport("xshell");
+$("#import-openssh").onclick = () => chooseSessionImport("ssh");
+cancelImportButton.onclick = () => importDialog.close();
+importDialog.oncancel = (event) => { if (exchangingSessions) event.preventDefault(); };
+importDialog.onclose = () => {
+  // A native close event can arrive after the next file has already opened.
+  if (importDialog.open) return;
+  importPreview = null;
+  importList.replaceChildren();
+};
+$("#session-import-form").onsubmit = async (event) => {
+  event.preventDefault();
+  if (!importPreview || exchangingSessions || applyImportButton.disabled) return;
+  exchangingSessions = true;
+  applyImportButton.disabled = cancelImportButton.disabled = true;
+  importError.hidden = true;
+  try {
+    const result = await api.applySessionImport({ token: importPreview.token, choices: importChoices });
+    sessions = result.sessions;
+    renderSessions();
+    importDialog.close();
+    setMode("sessions");
+    toast(`导入完成 · 新增 ${result.added} · 更新 ${result.updated} · 跳过 ${result.skipped}`);
+  } catch (error) {
+    importError.textContent = error.message;
+    importError.hidden = false;
+  } finally {
+    exchangingSessions = false;
+    cancelImportButton.disabled = false;
+    if (importDialog.open) renderImportSummary();
+  }
+};
+$("#export-openssh").onclick = async () => {
+  if (exchangingSessions) return;
+  exchangingSessions = true;
+  $("#window-tools-options").hidePopover();
+  try {
+    const result = await api.exportSshConfig();
+    if (result) toast(`已导出 ${result.count} 条会话${result.skipped ? "，跳过无效会话 " + result.skipped + " 条" : ""}`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    exchangingSessions = false;
+  }
+};
 $("#move-tab").onclick = async () => {
+  $("#window-tools-options").hidePopover();
   if (current)
     try {
       await api.moveTab({ id: current });
@@ -1257,6 +1673,7 @@ $("#move-tab").onclick = async () => {
     }
 };
 $("#window-picker").onclick = async () => {
+  $("#window-tools-options").hidePopover();
   const list = $("#window-list");
   list.replaceChildren();
   const windows = await api.windows();
@@ -1314,7 +1731,12 @@ document.addEventListener("keydown", (e) => {
 const { id: windowId, number: windowNumber } = await api.windowReady();
 $("#window-label").textContent = "窗口 " + windowNumber;
 try {
-  sessions = await api.sessions();
+  const [savedSessions, settings, dragAvailable] = await Promise.all([
+    api.sessions(), api.settings(), api.localDragAvailable(),
+  ]);
+  localDragAvailable = dragAvailable;
+  sessions = savedSessions;
+  updateSettings(settings);
   renderSessions();
 } catch (e) {
   toast(e.message);

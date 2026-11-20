@@ -32,7 +32,7 @@ async function remoteMissing(s, remote) {
     throw e;
   }
 }
-async function transferTree(s, action, local, remote, progress = () => {}) {
+async function transferTree(s, action, local, remote, progress = () => {}, expectedFileSize) {
   let completed = 0,
     files = 0;
   let last = 0;
@@ -75,6 +75,9 @@ async function transferTree(s, action, local, remote, progress = () => {}) {
     if (depth > 100) throw new Error("目录层级过深");
     const stat = await call(s, "lstat", remote);
     if (stat.isSymbolicLink()) throw new Error("暂不下载符号链接：" + remote);
+    if (depth === 0 && expectedFileSize !== undefined &&
+      (!stat.isFile() || stat.size !== expectedFileSize))
+      throw new Error("拖放过程中远程文件已变化，请重试");
     await noLocalLink(local);
     if (stat.isDirectory()) {
       await fs.mkdir(local, { recursive: true });
@@ -108,6 +111,31 @@ async function transferTree(s, action, local, remote, progress = () => {}) {
   return { files, bytes: completed };
 }
 module.exports = { transferTree, safeName };
+
+async function virtualDragManifest(sftp, remote) {
+  const entries = [];
+  async function visit(current, relative, depth = 0, attrs) {
+    if (depth > 100 || entries.length >= 10000 || relative.length >= 260)
+      throw new Error("目录过大或路径过长，请使用下载按钮");
+    const stat = attrs?.mode ? attrs : await call(sftp, "lstat", current);
+    const directory = stat.isDirectory();
+    if (!directory && (!stat.isFile() || !Number.isSafeInteger(stat.size) || stat.size < 0))
+      throw new Error("暂不拖出符号链接或特殊文件：" + relative);
+    entries.push({ remote: current, name: relative, directory, size: directory ? 0 : stat.size });
+    if (!directory) return;
+    const seen = new Set();
+    for (const entry of await call(sftp, "readdir", current)) {
+      if (entry.filename === "." || entry.filename === "..") continue;
+      const name = safeName(entry.filename);
+      if (seen.has(name.toLowerCase())) throw new Error("Windows 文件名大小写冲突：" + name);
+      seen.add(name.toLowerCase());
+      await visit(path.posix.join(current, name), relative + "\\" + name, depth + 1, entry.attrs);
+    }
+  }
+  await visit(remote, safeName(path.posix.basename(remote)));
+  return entries;
+}
+module.exports.virtualDragManifest = virtualDragManifest;
 
 async function relayTree(
   source,

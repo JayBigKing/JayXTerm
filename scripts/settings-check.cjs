@@ -1,0 +1,162 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+const { BrowserWindow, dialog } = require("electron");
+
+async function check(w) {
+  const chosen = path.resolve(".codex-cache/qa/cache-location");
+  const openDialog = dialog.showOpenDialog;
+  const messageBox = dialog.showMessageBox;
+  let asked = false;
+  dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [chosen] });
+  dialog.showMessageBox = async (_win, options) => {
+    asked ||= options.message === "是否迁移缓存数据？";
+    return { response: 1 };
+  };
+  const run = (code) => w.webContents.executeJavaScript(`(async () => {
+      const $ = (query) => document.querySelector(query);
+      const wait = async (check) => {
+        for (let i = 0; i < 150; i++) {
+          if (await check()) return;
+          await new Promise(resolve => setTimeout(resolve, 35));
+        }
+        throw new Error("Settings check timed out: " + check + " / " + $("#settings-error").textContent);
+      };
+      const open = async () => {
+        $("#settings-open").click();
+        await wait(() => $("#settings-dialog").open);
+        return $("#settings-form");
+      };
+
+      ${code}
+    })()`);
+  try {
+    await run(`
+      const initial = await api.settings();
+      if (initial.saveHistory || initial.fileOpen !== "double" || initial.cachePath)
+        throw new Error("Wrong default settings");
+      const color = () => getComputedStyle($(".sidebar")).backgroundColor;
+      const terminal = () => getComputedStyle($(".terminal-group-body")).backgroundColor;
+      if (!document.querySelector(".topbar #settings-open") || color() !== "rgb(57, 67, 81)")
+        throw new Error("Missing title bar settings or default background");
+      const terminalBackground = terminal();
+      if (terminalBackground !== "rgb(47, 56, 69)" ||
+          getComputedStyle($(".terminal-pane.active .xterm-viewport")).backgroundColor !== terminalBackground ||
+          getComputedStyle($(".window-tools")).backdropFilter !== "none")
+        throw new Error("Missing matte terminal or software-friendly toolbar");
+      const pickerColor = $("#settings-background");
+      $("#window-tools-menu").click();
+      if (!$("#window-tools-options").matches(":popover-open"))
+        throw new Error("Title bar window menu did not open");
+      $("#window-tools-options").hidePopover();
+      await open();
+      pickerColor.value = "#224466";
+      pickerColor.dispatchEvent(new Event("input"));
+      if (color() !== "rgb(34, 68, 102)" || terminal() !== terminalBackground)
+        throw new Error("Background preview did not affect the shell only");
+      $("#settings-cancel").click();
+      await wait(() => color() === "rgb(57, 67, 81)");
+      const form = await open();
+      $("#settings-choose-cache").click();
+      await wait(() => $("#settings-cache").value.endsWith("JayXTerm-cache"));
+      form.elements.saveHistory.checked = true;
+      form.elements.fileOpen.value = "single";
+      pickerColor.value = "#283755";
+      pickerColor.dispatchEvent(new Event("input"));
+      form.requestSubmit();
+      await wait(() => !$("#settings-dialog").open);
+      const updated = await api.settings();
+      if (updated.pendingCache !== ${JSON.stringify(path.join(chosen, "JayXTerm-cache"))})
+        throw new Error("Cache directory was not scheduled");
+      if (updated.backgroundColor !== "#283755" || color() !== "rgb(40, 55, 85)")
+        throw new Error("Background setting was not saved");
+
+      const input = { name: "测试历史密码", host: "localhost", username: "jay",
+        port: 22, password: "132exampleio", remember: true };
+      let saved = (await api.save(input)).find(s => s.name === input.name);
+      saved = (await api.save({ ...input, id: saved.id })).find(s => s.id === saved.id);
+      $("#new").click();
+      await wait(() => $("#session-password-history").options.length === 2);
+      const picker = $("#session-password-history");
+      if (picker.options[1].textContent !== "13********io")
+        throw new Error("History label was not masked");
+      picker.selectedIndex = 1;
+      picker.dispatchEvent(new Event("change"));
+      const password = $("#session-form").elements.password;
+      await wait(() => password.value === input.password && password.type === "password");
+      $("#toggle-password").click();
+      await wait(() => password.type === "text");
+      $("#editor-cancel").click();
+      await wait(() => !$("#editor").open);
+
+      $("#file-workspace-toggle").click();
+      const files = $(".terminal-group.focused .workspace-files");
+      const submit = files.querySelector("form");
+      submit.querySelector("input").value = "/home/jay";
+      submit.requestSubmit();
+      await wait(() => files.querySelector('[data-directory="/home/jay/projects"]'));
+      files.querySelector('[data-directory="/home/jay/projects"]').click();
+      await wait(() => files.querySelector("input").value === "/home/jay/projects");
+      $("#file-workspace-toggle").click();
+
+      const sidebar = $("#path-form");
+      $("#remote-path").value = "/home/jay";
+      sidebar.requestSubmit();
+      await wait(() => [...document.querySelectorAll("#file-list .file-row")]
+        .some(row => row.querySelector(".filename").textContent === "README.md"));
+      [...document.querySelectorAll("#file-list .file-row")]
+        .find(row => row.querySelector(".filename").textContent === "README.md").click();
+    `);
+    const storedWithHistory = fs.readFileSync(".codex-cache/qa/profile/settings.json", "utf8");
+    const [entry, duplicate] = JSON.parse(storedWithHistory).passwordHistory;
+    assert.ok(entry?.encrypted);
+    assert.equal(duplicate, undefined);
+    assert.ok(!storedWithHistory.includes("132exampleio"));
+    assert.notEqual(Buffer.from(entry.encrypted, "base64").toString(), "132exampleio");
+    let editor;
+    for (let i = 0; i < 100; i++) {
+      editor = BrowserWindow.getAllWindows().find(win =>
+        win.getTitle().startsWith("README.md ·") && !win.webContents.isLoading());
+      if (editor) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.ok(editor, "Single-click file did not open the editor");
+    await editor.webContents.executeJavaScript(`(async () => {
+      for (let i = 0; i < 100; i++) {
+        if (document.querySelector(".monaco-editor")) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error("Single-click file did not load the editor");
+    })()`);
+    editor.close();
+
+    await run(`
+      const saved = (await api.sessions()).find(s => s.name === "测试历史密码");
+      const edit = await open();
+      $("#settings-default-cache").click();
+      $("#settings-default-background").click();
+      edit.elements.saveHistory.checked = false;
+      edit.elements.fileOpen.value = "double";
+      edit.requestSubmit();
+      await wait(() => !$("#settings-dialog").open);
+      if ((await api.passwordHistory()).items.length || (await api.passwordHistory()).enabled)
+        throw new Error("Password history was not cleared");
+      if ((await api.settings()).backgroundColor !== "#394351")
+        throw new Error("Background reset was not saved");
+      if (await api.reveal(saved.id) !== "132exampleio")
+        throw new Error("Clearing history changed a saved session password");
+      $("#new").click();
+      await wait(() => $("#session-password-history").textContent.includes("未开启"));
+      $("#editor-cancel").click();
+    `);
+    assert.ok(asked, "Migration confirmation did not open");
+    const stored = fs.readFileSync(".codex-cache/qa/profile/settings.json", "utf8");
+    assert.equal(stored.includes("132exampleio"), false);
+    assert.deepEqual(JSON.parse(stored).passwordHistory, []);
+    console.log("PASS: settings dialog, cache migration confirmation, masked encrypted history and single-click file space");
+  } finally {
+    dialog.showOpenDialog = openDialog;
+    dialog.showMessageBox = messageBox;
+  }
+}
+module.exports = { check };

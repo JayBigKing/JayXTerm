@@ -97,8 +97,12 @@ function createWindows({
       minHeight: Math.min(650, area.height),
       x,
       y,
-      backgroundColor: "#0c111a",
+      backgroundColor: "#394351",
       title: `JayXTerm · 窗口 ${number}`,
+      ...(process.platform === "win32" && {
+        titleBarStyle: "hidden",
+        titleBarOverlay: { color: "#3b4553", symbolColor: "#c2cbd7", height: 54 },
+      }),
       webPreferences: {
         preload: path.join(__dirname, "preload.cjs"),
         nodeIntegration: false,

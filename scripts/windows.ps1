@@ -13,7 +13,7 @@ $env:ELECTRON_BUILDER_CACHE = Join-Path $cache 'electron-builder'
 $env:CSC_IDENTITY_AUTO_DISCOVERY = 'false'
 switch ($Task) {
   'install' { npm ci --registry=https://registry.npmjs.org }
-  'dev' { npm run dev }
+  'dev' { npm run build:drag; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; npm run dev }
   'package' { npm run dist:win }
   'test' { npm test }
   'smoke' { npm run build; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; & ./node_modules/.bin/electron.cmd scripts/smoke.cjs }

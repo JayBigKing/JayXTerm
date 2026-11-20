@@ -11,126 +11,98 @@
   </head>
   <body>
     <div class="app">
-      <aside class="sidebar">
-        <header class="brand">
-          <span class="logo">J›</span>
-          <div>JayXTerm<small>你的服务器工作台</small></div>
-          <span class="version">α</span>
-        </header>
-        <nav class="side-modes">
-          <button id="mode-sessions" class="active">▤ 会话</button
-          ><button id="mode-files">▱ 远程文件</button>
-        </nav>
-        <div id="session-panel">
-          <div class="side-title">工作空间 <span>LOCAL</span></div>
-          <div class="search">
-            <span>⌕</span
-            ><input id="search" placeholder="搜索名称、主机、分组" />
+      <header class="topbar" aria-label="JayXTerm 标题栏">
+        <div class="brand"><span class="logo" aria-hidden="true">J›</span><strong>JayXTerm</strong></div>
+        <strong id="workspace-title">概览</strong>
+        <div class="window-tools" aria-label="工作台操作">
+          <button id="window-tools-menu" type="button" popovertarget="window-tools-options">工作台 <span aria-hidden="true">▾</span></button>
+          <div id="window-tools-options" class="action-popover workbench-menu" popover aria-label="工作台">
+            <span id="window-label" class="window-menu-label"></span>
+            <button id="new-window" title="Ctrl+Shift+N">新窗口</button>
+            <button id="move-tab" disabled>移出标签</button>
+            <button id="window-picker" title="Ctrl+Shift+O">切换窗口…</button>
+            <span class="window-menu-label workbench-menu-divider">会话</span>
+            <button id="import-xshell" type="button">从 Xshell 备份导入…</button>
+            <button id="import-openssh" type="button">从 OpenSSH 配置导入…</button>
+            <button id="export-openssh" type="button">导出为 OpenSSH 配置…</button>
           </div>
-          <button class="primary new-session" id="new">＋ 新建会话</button>
-          <div id="sessions" class="sessions"></div>
+          <button id="split-add" type="button" disabled title="增加一个分屏">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16"/></svg>分屏
+          </button>
+          <button id="file-workspace-toggle" type="button" aria-pressed="false" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/></svg><span>文件空间</span>
+          </button>
+          <button id="settings-open" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></svg>设置
+          </button>
         </div>
-        <aside class="files hidden" id="files-panel">
-          <div class="file-heading">
-            <strong>远程文件</strong><span id="focused-sftp">SFTP</span>
-          </div>
-          <form id="path-form" class="pathbar">
-            <button type="button" id="up" title="上一级">↑</button
-            ><input id="remote-path" value="." aria-label="远程目录" /><button
-              title="打开目录"
-            >
-              ↵
-            </button>
-          </form>
-          <div class="file-actions">
-            <button id="refresh">↻ 刷新</button>
-            <button id="upload" popovertarget="upload-options">↑ 上传 ▾</button>
-            <div
-              id="upload-options"
-              popover
-              class="action-popover"
-              aria-label="上传类型"
-            >
-              <button id="upload-file">选择文件…</button>
-              <button id="upload-directory">选择文件夹…</button>
+      </header>
+      <div class="app-content">
+        <aside class="sidebar">
+          <nav class="side-modes">
+            <button id="mode-sessions" class="active">▤ 会话</button
+            ><button id="mode-files">▱ 远程文件</button>
+          </nav>
+          <div id="session-panel">
+            <div class="side-title">会话列表</div>
+            <div class="search">
+              <span>⌕</span
+              ><input id="search" placeholder="搜索名称、主机、分组" />
             </div>
-            <button id="sync-cwd" title="将远程文件面板切换到 SSH 当前目录">
-              ⇄ SSH 当前目录
-            </button>
+            <button class="primary new-session" id="new">＋ 新建会话</button>
+            <div id="sessions" class="sessions"></div>
           </div>
-          <div id="file-list" class="file-list"></div>
-          <div id="transfer-status" class="transfer-status">
-            拖入上传 · 双击文件编辑
-          </div>
+          <aside class="files hidden" id="files-panel">
+            <div class="file-heading">
+              <strong>远程文件</strong><span id="focused-sftp">SFTP</span>
+            </div>
+            <form id="path-form" class="pathbar">
+              <button type="button" id="up" title="上一级">↑</button
+              ><input id="remote-path" value="." aria-label="远程目录" /><button
+                title="打开目录"
+              >
+                ↵
+              </button>
+            </form>
+            <div class="file-actions">
+              <button id="refresh">↻ 刷新</button>
+              <button id="upload" popovertarget="upload-options">↑ 上传 ▾</button>
+              <div
+                id="upload-options"
+                popover
+                class="action-popover"
+                aria-label="上传类型"
+              >
+                <button id="upload-file">选择文件…</button>
+                <button id="upload-directory">选择文件夹…</button>
+              </div>
+              <button id="sync-cwd" title="将远程文件面板切换到 SSH 当前目录">
+                ⇄ SSH 当前目录
+              </button>
+            </div>
+            <div id="file-list" class="file-list"></div>
+            <div id="transfer-status" class="transfer-status">
+              拖入上传 · 双击文件编辑
+            </div>
+          </aside>
         </aside>
-        <footer class="side-footer">
-          <span class="dot"></span>本地保存 · 无云端依赖<small
-            >Windows 优先 / 软件渲染</small
-          >
-        </footer>
-      </aside>
-      <main>
-        <header class="topbar">
-          <div>
-            <span class="muted">工作空间</span><span class="slash">/</span
-            ><strong id="workspace-title">概览</strong>
-          </div>
-          <div class="window-tools">
-            <span id="window-label" class="pill"></span
-            ><button id="new-window" title="Ctrl+Shift+N">＋ 新窗口</button
-            ><button
-              id="move-tab"
-              disabled
-              title="将当前标签移到独立窗口，保持连接"
-            >
-              ↗ 移出标签</button
-            ><button id="window-picker" title="Ctrl+Shift+O">▣ 窗口</button>
-            <button
-              id="split-add"
-              type="button"
-              disabled
-              title="增加一个分屏"
-            >
-              ＋ 分屏
-            </button>
-            <button
-              id="file-workspace-toggle"
-              type="button"
-              aria-pressed="false"
-              disabled
-            >
-              文件空间
-            </button>
-          </div>
-        </header>
-        <div id="welcome" class="welcome">
-          <div class="welcome-inner">
-            <div class="eyebrow">YOUR SERVERS. ONE WORKSPACE.</div>
-            <h1>连接，开始工作。</h1>
-            <p>终端与文件并肩，专注每一次远程操作。</p>
-            <button class="primary" id="welcome-new">
-              ＋ 添加第一台服务器
-            </button>
-            <div class="features">
-              <div>
-                <b>01</b><strong>快速进入终端</strong
-                ><span>多标签 SSH，随时切换上下文</span>
-              </div>
-              <div>
-                <b>02</b><strong>文件就在手边</strong
-                ><span>SFTP 浏览、上传和下载</span>
-              </div>
-              <div>
-                <b>03</b><strong>凭据留在本机</strong
-                ><span>使用系统加密保存会话密码</span>
-              </div>
+        <main>
+          <div id="welcome" class="welcome">
+            <div class="welcome-inner">
+              <div class="eyebrow">YOUR SERVERS. ONE WORKSPACE.</div>
+              <h1>连接，开始工作。</h1>
+              <p>终端与文件并肩，专注每一次远程操作。</p>
+              <button class="primary" id="welcome-new">
+                ＋ 添加第一台服务器
+              </button>
             </div>
           </div>
-        </div>
-        <section id="connected" class="connected hidden">
-          <div id="terminal-area"></div>
-        </section>
-        <footer class="statusbar">
+          <section id="connected" class="connected hidden">
+            <div id="terminal-area"></div>
+          </section>
+        </main>
+      </div>
+      <footer class="statusbar">
           <span id="status">就绪</span
           ><span
             ><select id="terminal-encoding" aria-label="当前终端编码" disabled>
@@ -148,9 +120,60 @@
               <button id="cwd-help">SSH 目录同步</button>
             </span></span
           >
-        </footer>
-      </main>
+      </footer>
     </div>
+    <dialog id="session-import-dialog" aria-labelledby="session-import-title">
+      <form id="session-import-form">
+        <header class="session-import-heading">
+          <h2 id="session-import-title">导入会话</h2>
+          <span id="session-import-source"></span>
+        </header>
+        <div id="session-import-rows" class="session-import-rows" role="list" aria-label="导入的会话"></div>
+        <p id="session-import-error" class="error" role="alert" hidden></p>
+        <footer class="session-import-footer">
+          <output id="session-import-summary" aria-live="polite"></output>
+          <div>
+            <button type="button" id="session-import-cancel">取消</button>
+            <button type="submit" id="session-import-apply" class="primary">确认导入</button>
+          </div>
+        </footer>
+      </form>
+    </dialog>
+    <dialog id="settings-dialog">
+      <form id="settings-form">
+        <div class="dialog-heading"><h2>设置</h2></div>
+        <label for="settings-cache">缓存位置</label>
+        <div class="settings-cache-row">
+          <input id="settings-cache" readonly />
+          <button id="settings-choose-cache" type="button">选择…</button>
+          <button id="settings-default-cache" type="button">用默认位置</button>
+        </div>
+        <p class="form-note" id="settings-cache-note">位置变更在下次启动时生效。</p>
+        <label class="check">
+          <input name="saveHistory" type="checkbox" />加密保存历史密码
+        </label>
+        <p class="form-note">默认关闭。关闭并保存设置会清空历史密码本。各会话保存的密码独立管理。</p>
+        <label for="settings-background">页面背景颜色</label>
+        <div class="settings-color-row">
+          <input id="settings-background" name="backgroundColor" type="color" value="#394351" />
+          <output id="settings-background-value" for="settings-background">#394351</output>
+          <button id="settings-default-background" type="button">恢复默认颜色</button>
+        </div>
+        <p class="form-note">应用于侧栏、欢迎页和分屏之间。</p>
+        <label>文件和目录打开方式
+          <select name="fileOpen">
+            <option value="double">双击打开</option>
+            <option value="single">单击打开</option>
+          </select>
+        </label>
+        <p class="form-note">适用于侧栏远程文件和文件空间。目录进入，文本文件打开编辑器。</p>
+        <p id="settings-error" class="error" role="status"></p>
+        <div class="dialog-actions">
+          <button id="settings-cancel" type="button">取消</button>
+          <button id="settings-save" class="primary" type="submit">保存设置</button>
+        </div>
+      </form>
+    </dialog>
     <dialog id="editor">
       <form id="session-form">
         <div class="dialog-heading">
@@ -159,10 +182,9 @@
           <p>配置一次，下次直接连接。</p>
         </div>
         <input type="hidden" name="id" /><label
-          >会话名称<input
+          >会话名称（选填）<input
             name="name"
-            placeholder="例如：生产服务器"
-            required
+            placeholder="留空则使用主机:端口 · 用户名"
             maxlength="100"
         /></label>
         <div class="form-row">
@@ -205,6 +227,10 @@
             </button>
           </div></label
         ><label
+          >历史密码<select id="session-password-history" aria-label="历史密码" disabled>
+            <option value="">无密码记录</option>
+          </select></label
+        ><label
           >终端编码<select name="encoding">
             <option value="utf-8">UTF-8（新系统）</option>
             <option value="gbk">GBK / CP936（旧系统）</option>
@@ -233,13 +259,13 @@
       <form id="password-form">
         <h2>输入连接密码</h2>
         <p id="password-host"></p>
-        <input
-          id="connect-password"
-          type="password"
-          placeholder="密码（仅本次使用）"
-          required
-          autocomplete="off"
-        />
+        <div class="password-field">
+          <input id="connect-password" type="password" placeholder="输入连接密码" required autocomplete="off" />
+          <button type="button" id="toggle-connect-password" aria-pressed="false">显示</button>
+        </div>
+        <label>历史密码<select id="connect-password-history" aria-label="历史密码" disabled>
+          <option value="">无密码记录</option>
+        </select></label>
         <div class="dialog-actions">
           <button type="button" id="password-cancel">取消</button
           ><button class="primary">连接</button>

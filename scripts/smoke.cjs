@@ -4,9 +4,8 @@ const { createFixture } = require("./ssh-fixture.cjs");
 const fs = require("node:fs");
 const path = require("node:path");
 process.env.JAYXTERM_QA = "1";
-fs.rmSync(path.resolve(".codex-cache/qa/profile/sessions.json"), {
-  force: true,
-});
+for (const name of ["sessions.json", "settings.json"])
+  fs.rmSync(path.resolve(".codex-cache/qa/profile", name), { force: true });
 require("../src/main.cjs");
 app.whenReady().then(async () => {
   const deadline = setTimeout(() => {
@@ -17,11 +16,9 @@ app.whenReady().then(async () => {
     const w = BrowserWindow.getAllWindows()[0];
     if (w.webContents.isLoading())
       await new Promise((r) => w.webContents.once("did-finish-load", r));
-    const fixture = createFixture({
-      readline:
-        process.env.JAYXTERM_READLINE_QA === "1" ||
-        process.env.JAYXTERM_VIM_QA === "1",
-    });
+    const readline = process.env.JAYXTERM_READLINE_QA === "1" ||
+      process.env.JAYXTERM_VIM_QA === "1";
+    const fixture = createFixture({ readline });
     const { server } = fixture;
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     dialog.showMessageBox = async () => ({ response: 1 });
@@ -38,12 +35,13 @@ app.whenReady().then(async () => {
       f.elements.password.value='wrong-password';document.querySelector('#test-connection').click();
       for(let i=0;i<100&&document.querySelector('#test-connection').disabled;i++)await new Promise(r=>setTimeout(r,100));
       if(!document.querySelector('#test-status').textContent.startsWith('连接失败'))throw new Error('Wrong test password accepted');
-      f.elements.name.value='开发服务器';f.elements.password.value='qa-password';
+      f.elements.password.value='qa-password';
       f.requestSubmit();
       await new Promise(r=>setTimeout(r,500));
       if(document.querySelector('#editor').open)throw new Error(document.querySelector('#form-error').textContent||'Session save failed');
       const sessions=await window.api.sessions();
-      if(!sessions.some(s=>s.name==='开发服务器'&&s.hasPassword))throw new Error('Saved credential missing');
+      if(!sessions.some(s=>s.name==='127.0.0.1:${server.address().port} · jay'&&s.hasPassword))
+        throw new Error('Generated session name or saved credential missing');
       if(sessions.some(s=>s.password))throw new Error('Password leaked to renderer');
     })()`);
     await w.webContents.executeJavaScript(`(async()=>{
@@ -95,6 +93,26 @@ app.whenReady().then(async () => {
     await w.webContents.executeJavaScript(
       `(()=>{if(document.querySelector('#files-panel').getBoundingClientRect().left>=document.querySelector('#terminal-area').getBoundingClientRect().left)throw new Error('SFTP explorer is not on the left');})()`,
     );
+    const originalSize = w.getSize();
+    try {
+      for (const [height, zoom] of [[640, 1], [701, 1.25], [817, 1.5]]) {
+        w.setSize(originalSize[0], height);
+        w.webContents.setZoomFactor(zoom);
+        await new Promise((resolve) => setTimeout(resolve, 180));
+        const overflow = await w.webContents.executeJavaScript(`(() => {
+          const pane = document.querySelector('.terminal-pane.active');
+          const terminal = pane.querySelector('.xterm').getBoundingClientRect();
+          const rows = pane.querySelector('.xterm-screen').getBoundingClientRect();
+          const lastRow = Array.from(pane.querySelectorAll('.xterm-rows > div')).at(-1).getBoundingClientRect();
+          return { bottom: lastRow.bottom - terminal.bottom, right: rows.right - terminal.right };
+        })()`);
+        if (overflow.bottom > 1 || overflow.right > 1)
+          throw new Error("SSH grid exceeds its viewport: " + JSON.stringify(overflow));
+      }
+    } finally {
+      w.webContents.setZoomFactor(1);
+      w.setSize(...originalSize);
+    }
     fs.writeFileSync(
       path.resolve(".codex-cache/qa/connected.png"),
       (await w.webContents.capturePage()).toPNG(),
@@ -103,6 +121,8 @@ app.whenReady().then(async () => {
       await require("./clipboard-check.cjs").check(w, fixture);
     if (process.env.JAYXTERM_EDITOR_QA === "1")
       await require("./remote-editor-check.cjs").check(w, fixture);
+    if (process.env.JAYXTERM_LOCAL_DRAG_QA === "1")
+      await require("./local-drag-check.cjs").check(w, fixture);
     if (process.env.JAYXTERM_READLINE_QA === "1")
       await require("./readline-check.cjs").check(w, fixture);
     if (process.env.JAYXTERM_VIM_QA === "1")
@@ -122,10 +142,13 @@ app.whenReady().then(async () => {
     })()`);
     if (queryBytes().length)
       throw new Error("Opening the dialog must not send input");
-    const queryDirectory =
-      process.platform === "win32"
+    // A real PTY answers the query itself using its inherited working directory.
+    const queryDirectory = readline
+      ? process.cwd()
+      : process.platform === "win32"
         ? "/home/jay/projects/当前目录 100%"
         : path.resolve(".codex-cache/qa/当前目录 100%");
+    fixture.dirs.add(queryDirectory);
     const shellStream = [...fixture.streams][0];
     shellStream.write("\x1b[?1049h");
     await w.webContents.executeJavaScript(`(async () => {
@@ -154,12 +177,11 @@ app.whenReady().then(async () => {
       throw new Error(
         "Directory query was not sent to the existing SSH terminal",
       );
-    fixture.dirs.add(queryDirectory);
-    if (process.platform === "win32") {
+    if (!readline && process.platform === "win32") {
       shellStream.write(
         `\x1b]7;file://${queryHost}${queryDirectory.replaceAll("%", "%25")}\x07`,
       );
-    } else {
+    } else if (!readline) {
       fs.mkdirSync(queryDirectory, { recursive: true });
       const result = require("node:child_process").execFileSync(
         "/bin/sh",
@@ -216,7 +238,7 @@ app.whenReady().then(async () => {
     await w.webContents.executeJavaScript(`(async()=>{
       const data=new DataTransfer();data.items.add(document.querySelector('#qa-file').files[0]);
       const list=document.querySelector('#file-list');
-      const folder=list.querySelector('[data-directory]');
+      const folder=list.querySelector('[data-directory="/home/jay/projects"]');
       const dispatch=(target,type)=>target.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer:data}));
       dispatch(list,'dragover');
       if(!list.classList.contains('drop-active'))throw new Error('Current directory should highlight');
@@ -285,6 +307,10 @@ app.whenReady().then(async () => {
       await require("./multiwindow-check.cjs").check(w, fixture);
     if (process.env.JAYXTERM_WORKSPACE_QA === "1")
       await require("./workspace-check.cjs").check(w, fixture);
+    if (process.env.JAYXTERM_SETTINGS_QA === "1")
+      await require("./settings-check.cjs").check(w);
+    if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
+      await require("./session-exchange-check.cjs").check(w);
     await w.webContents.executeJavaScript(
       `(()=>{for(const button of document.querySelectorAll('.tab .close'))button.click();})()`,
     );

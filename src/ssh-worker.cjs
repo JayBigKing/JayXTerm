@@ -1,10 +1,71 @@
 const { Client } = require("ssh2");
 const { TerminalCodec } = require("./codec.cjs");
 const crypto = require("node:crypto");
-const { transferTree, relayTree } = require("./transfers.cjs");
+const { transferTree, relayTree, virtualDragManifest } = require("./transfers.cjs");
 const { readRemoteText, saveRemoteText } = require("./remote-text.cjs");
 const connections = new Map();
 const send = (m) => process.connected && process.send(m);
+// OpenSSH forks both channel processes from its per-connection daemon. Only
+// read a directory if that daemon has exactly one interactive PTY child.
+const directoryMarker = Buffer.from("JAYXTERM_PTY_CWD\0");
+const directoryProbe = String.raw`
+parent=$PPID
+case "$parent" in ''|*[!0-9]*) exit 1;; esac
+IFS= read -r daemon < "/proc/$parent/comm" || exit 1
+case "$daemon" in sshd|sshd-session) ;; *) exit 1;; esac
+pid=$(LC_ALL=C ps -o pid=,tty= --ppid "$parent" |
+  LC_ALL=C awk '$2 ~ /^pts\/[0-9]+$/ { n++; pid=$1 } END { if (n == 1) print pid; else exit 1 }') || exit 1
+case "$pid" in ''|*[!0-9]*) exit 1;; esac
+printf 'JAYXTERM_PTY_CWD\000'
+readlink -z "/proc/$pid/cwd"
+`;
+function shellDirectory(connection) {
+  if (!connection?.stream) return null;
+  connection.directoryQuery ??= new Promise((resolve) => {
+    let channel, finished = false, bytes = 0, exit;
+    const chunks = [];
+    function finish(directory = null) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(directory);
+    }
+    const timer = setTimeout(() => {
+      finish();
+      channel?.close();
+    }, 2600);
+    connection.client.exec(directoryProbe, (error, stream) => {
+      if (error) return finish();
+      if (finished) return stream.close();
+      channel = stream;
+      stream.stderr.resume();
+      stream.on("error", () => finish());
+      stream.on("data", (chunk) => {
+        if (finished) return;
+        bytes += chunk.length;
+        if (bytes > 16384) {
+          finish();
+          stream.close();
+        } else chunks.push(chunk);
+      });
+      stream.on("exit", (code) => { exit = code; });
+      stream.once("close", () => {
+        const output = Buffer.concat(chunks);
+        const start = output.indexOf(directoryMarker);
+        if (exit !== 0 || start < 0) return finish();
+        const from = start + directoryMarker.length;
+        const end = output.indexOf(0, from);
+        if (end < 0) return finish();
+        // SFTP paths use UTF-8 independently of the terminal's input/output codec.
+        const directory = output.toString("utf8", from, end);
+        if (!directory.startsWith("/") || /[\x00-\x1f\x7f\ufffd]/.test(directory) || directory.endsWith(" (deleted)"))
+          return finish();
+        finish(directory);
+      });
+    });
+  }).finally(() => { connection.directoryQuery = null; });
+  return connection.directoryQuery;
+}
 function getSftp(connection) {
   if (!connection?.stream) throw new Error("SSH 尚未连接");
   if (!connection.sftpPromise) {
@@ -150,13 +211,17 @@ process.on("message", async (m) => {
       c.pending = Math.max(0, c.pending - m.bytes);
       if (c.pending < 65536 && !c.frozen) c.stream?.resume();
     } else if (m.type === "disconnect") c?.client.destroy();
-    else if (m.type === "sftp") {
+    else if (m.type === "shell-directory") {
+      send({ type: "result", rid: m.rid, result: await shellDirectory(c) });
+    } else if (m.type === "sftp") {
       const s = await getSftp(c);
       let result;
       if (m.action === "read-text") {
         result = await readRemoteText(s, m.path, m.encoding);
       } else if (m.action === "save-text") {
-        result = await saveRemoteText(s, m.path, m.text, m.version, m.sourceEncoding, m.encoding);
+        result = await saveRemoteText(s, m.path, m.text, m.version, m.sourceEncoding, m.encoding, m.forceFormat);
+      } else if (m.action === "drag-manifest") {
+        result = await virtualDragManifest(s, m.path);
       } else if (m.action === "relay") {
         const source = await getSftp(connections.get(m.source));
         result = await relayTree(
@@ -179,6 +244,7 @@ process.on("message", async (m) => {
             m.path,
             (progress) =>
               send({ type: "progress", id: m.id, rid: m.rid, ...progress }),
+            m.expectedFileSize,
           );
         } finally {
           c.transferring = false;

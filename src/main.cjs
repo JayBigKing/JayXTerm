@@ -13,9 +13,13 @@ const path = require("node:path");
 const fs = require("node:fs/promises");
 const { safeName } = require("./transfers.cjs");
 const { installEditorWindows } = require("./editor-windows.cjs");
+const { installLocalDrag } = require("./local-drag.cjs");
+const { existsSync } = require("node:fs");
 const { fork } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const { openStore, validateSession } = require("./store.cjs");
+const { openAppSettings, validBackground } = require("./app-settings.cjs");
+const { readImport, previewImport, applyImport, exportOpenSsh } = require("./session-exchange.cjs");
 // Deliberately use software rendering as the initial performance baseline.
 app.setName("JayXTerm");
 app.disableHardwareAcceleration();
@@ -53,8 +57,15 @@ function ensureOwner(sender, id) {
 const hasInstanceLock =
   process.env.JAYXTERM_QA || app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
+const appSettings = hasInstanceLock && openAppSettings(
+  path.join(app.getPath("userData"), "settings.json"),
+  app.getPath("sessionData"),
+  safeStorage,
+);
+if (appSettings) app.setPath("sessionData", appSettings.initializeCache());
 const active = new Map(),
   requests = new Map();
+const pendingPasswords = new Map();
 const tests = new Map();
 const remoteDrags = new Map();
 function storedPassword(id) {
@@ -68,6 +79,7 @@ function finishTest(id, error, result) {
   if (!t) return;
   clearTimeout(t.timer);
   tests.delete(id);
+  pendingPasswords.delete(id);
   active.delete(id);
   owners.delete(id);
   states.delete(id);
@@ -111,10 +123,31 @@ app.whenReady().then(() => {
     isBusy: (id) => busyTransfers.has(id),
     onDisconnect: (id) => {
       active.delete(id);
+      pendingPasswords.delete(id);
       states.delete(id);
       if (tests.has(id)) finishTest(id, "窗口已关闭");
     },
   });
+  const nativeDrag = app.isPackaged
+    ? path.join(process.resourcesPath, "jayxterm-drag.exe")
+    : path.join(__dirname, "../.codex-cache/build/native/jayxterm-drag.exe");
+  const dragHelper = !app.isPackaged && process.env.JAYXTERM_QA &&
+      process.env.JAYXTERM_LOCAL_DRAG_QA === "1"
+    ? {
+        file: process.execPath,
+        args: [path.join(__dirname, "../scripts/local-drag-helper-fixture.cjs")],
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      }
+    : process.platform === "win32" && existsSync(nativeDrag) ? { file: nativeDrag } : null;
+  app.once("will-quit", installLocalDrag({
+    ipcMain,
+    helper: dragHelper,
+    tempRoot: path.join(app.getPath("userData"), "drag-out"),
+    ensureOwner,
+    ready: editorConnectionReady,
+    request,
+    busyTransfers,
+  }));
   Menu.setApplicationMenu(null);
   window = workspace.create();
   worker.on("message", async (m) => {
@@ -122,6 +155,8 @@ app.whenReady().then(() => {
       tests.has(m.id) &&
       ["test-result", "error", "closed"].includes(m.type)
     ) {
+      if (m.type === "test-result" && m.result?.ssh)
+        recordPassword(pendingPasswords.get(m.id), workspace.owner(m.id));
       finishTest(
         m.id,
         m.type === "test-result" ? null : m.message || "测试连接已关闭",
@@ -163,12 +198,15 @@ app.whenReady().then(() => {
       send({ type: "verify", id: m.id, accept });
       return;
     }
+    const owner = workspace.owner(m.id);
     if (
       owners.has(m.id) &&
       (m.type === "ready" || m.type === "closed" || m.type === "error")
-    )
+    ) {
       states.set(m.id, m.type);
-    const owner = workspace.owner(m.id);
+      if (m.type === "ready") recordPassword(pendingPasswords.get(m.id), owner);
+      pendingPasswords.delete(m.id);
+    }
     if (m.type === "closed") active.delete(m.id);
     if (owner && !owner.isDestroyed()) owner.webContents.send("ssh:event", m);
   });
@@ -180,6 +218,7 @@ app.whenReady().then(() => {
         message: "SSH 后台进程已退出，请重启应用",
       });
     active.clear();
+    pendingPasswords.clear();
     for (const id of tests.keys()) finishTest(id, "SSH 后台进程已退出");
     for (const r of requests.values()) {
       clearTimeout(r.timer);
@@ -217,7 +256,119 @@ ipcMain.handle("clipboard:menu", (e, { id, hasSelection, canPaste }) => {
   ]).popup({ window: win });
 });
 ipcMain.handle("sessions:list", () => safeSessions());
+const pendingImports = new WeakMap();
+ipcMain.handle("sessions:import-preview", async (event, format) => {
+  if (format !== "xshell" && format !== "ssh") throw new Error("未知的会话导入格式");
+  pendingImports.delete(event.sender);
+  const xshell = format === "xshell";
+  const selected = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: xshell ? "选择 Xshell 备份或会话文件" : "选择 OpenSSH 配置文件",
+    properties: ["openFile"],
+    filters: xshell ? [{ name: "Xshell 备份与会话", extensions: ["xts", "xsh"] }]
+      : [{ name: "OpenSSH 配置", extensions: ["*"] }],
+  });
+  if (selected.canceled) return null;
+  const file = selected.filePaths[0];
+  const items = await readImport(file, format);
+  if (!items.length) throw new Error("文件中没有可预览的 SSH 会话");
+  if (event.sender.isDestroyed()) return null;
+  const snapshot = store.get().sessions;
+  const rows = previewImport(items, snapshot);
+  const token = randomUUID();
+  pendingImports.set(event.sender, { token, rows, snapshot });
+  return { token, file: path.basename(file), rows };
+});
+ipcMain.handle("sessions:import-apply", (event, { token, choices } = {}) => {
+  const preview = pendingImports.get(event.sender);
+  const data = store.get();
+  if (!preview || token !== preview.token || preview.snapshot !== data.sessions)
+    throw new Error("会话列表已更新，请重新打开导入预览");
+  const { sessions, added, updated, skipped } = applyImport(preview.rows, data.sessions, choices);
+  if (added || updated) {
+    store.write({ ...data, sessions });
+    workspace.broadcast({ type: "sessions-changed" }, event.sender.id);
+  }
+  pendingImports.delete(event.sender);
+  return { sessions: safeSessions(), added, updated, skipped };
+});
+ipcMain.handle("sessions:export-ssh", async (event) => {
+  const { text, count, skipped } = exportOpenSsh(store.get().sessions);
+  if (!count) throw new Error("没有可导出的 SSH 会话");
+  const selected = await dialog.showSaveDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: "导出为 OpenSSH 配置",
+    defaultPath: "jayxterm-ssh.config",
+    filters: [{ name: "OpenSSH 配置", extensions: ["config"] }],
+  });
+  if (selected.canceled) return null;
+  const staged = path.join(path.dirname(selected.filePath), `.jayxterm-export-${randomUUID()}.tmp`);
+  const handle = await fs.open(staged, "wx", 0o600);
+  try {
+    try {
+      await handle.writeFile(text);
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(staged, selected.filePath);
+  } finally {
+    await fs.rm(staged, { force: true }).catch(() => {});
+  }
+  return { count, skipped };
+});
 ipcMain.handle("sessions:reveal", (_e, id) => storedPassword(id));
+function recordPassword(secret, win) {
+  if (!secret) return;
+  try {
+    appSettings.record(secret);
+  } catch {
+    if (win && !win.isDestroyed())
+      win.webContents.send("window:event", { type: "notice", message: "无法写入密码历史" });
+  }
+}
+ipcMain.handle("settings:get", () => appSettings.describe());
+ipcMain.handle("settings:choose-cache", async (event) => {
+  const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
+    title: "选择缓存所在的文件夹",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  return result.canceled ? null : path.join(result.filePaths[0], "JayXTerm-cache");
+});
+let savingSettings = false;
+ipcMain.handle("settings:apply", async (event, input) => {
+  if (savingSettings) throw new Error("另一个窗口正在保存设置");
+  if (typeof input?.cachePath !== "string" ||
+    (input.cachePath && (!path.isAbsolute(input.cachePath) ||
+      path.basename(input.cachePath) !== "JayXTerm-cache")) ||
+    typeof input.saveHistory !== "boolean" ||
+    !["single", "double"].includes(input.fileOpen) ||
+    (input.backgroundColor !== undefined && !validBackground(input.backgroundColor)))
+    throw new Error("无效的设置");
+  savingSettings = true;
+  try {
+    const settings = appSettings.describe();
+    const previous = settings.pendingCache ?? settings.cachePath;
+    let migrate = false;
+    if (input.cachePath !== previous && input.cachePath !== settings.cachePath) {
+      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
+        message: "是否迁移缓存数据？",
+        detail: "下次启动时切换到新目录。现有会话与密码仍保存在应用配置中。",
+        type: "question",
+        buttons: ["取消", "迁移后切换", "直接切换"],
+        defaultId: 1,
+        cancelId: 0,
+      });
+      if (response === 0) return null;
+      migrate = response === 1;
+    }
+    const result = appSettings.apply({ ...input, migrate });
+    if (!result.saveHistory) pendingPasswords.clear();
+    workspace.broadcast({ type: "settings-changed", settings: result }, event.sender.id);
+    return result;
+  } finally {
+    savingSettings = false;
+  }
+});
+ipcMain.handle("password-history:list", () => appSettings.listHistory());
+ipcMain.handle("password-history:select", (_e, id) => appSettings.selectPassword(id));
 ipcMain.handle("ssh:test", (e, input) => {
   const config = validateSession({
     ...input,
@@ -227,6 +378,7 @@ ipcMain.handle("ssh:test", (e, input) => {
   const id = randomUUID();
   active.set(id, config);
   owners.set(id, e.sender.id);
+  if (input.password && appSettings.describe().saveHistory) pendingPasswords.set(id, input.password);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => finishTest(id, "测试连接超时"), 120000);
     tests.set(id, { resolve, reject, timer });
@@ -268,6 +420,7 @@ ipcMain.handle("sessions:save", (e, input) => {
     ...d,
     sessions: [...d.sessions.filter((x) => x.id !== s.id), s],
   });
+  recordPassword(input.password, BrowserWindow.fromWebContents(e.sender));
   workspace.broadcast({ type: "sessions-changed" }, e.sender.id);
   return safeSessions();
 });
@@ -289,6 +442,7 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows }) => {
   active.set(id, s);
   owners.set(id, e.sender.id);
   states.set(id, "connecting");
+  if (password && appSettings.describe().saveHistory) pendingPasswords.set(id, password);
   send({
     type: "connect",
     id,
@@ -313,6 +467,7 @@ ipcMain.on("ssh:send", (e, m) => {
     send(m);
     owners.delete(m.id);
     active.delete(m.id);
+    pendingPasswords.delete(m.id);
     states.delete(m.id);
     return;
   }
@@ -327,6 +482,10 @@ ipcMain.on("ssh:send", (e, m) => {
 ipcMain.handle("sftp:list", (e, { id, path: remote }) => {
   ensureOwner(e.sender, id);
   return request({ id, action: "list", path: remote });
+});
+ipcMain.handle("ssh:directory", (event, id) => {
+  ensureOwner(event.sender, id);
+  return editorConnectionReady(id) ? request({ id, type: "shell-directory" }) : null;
 });
 function editorConnectionReady(id) {
   return active.has(id) && states.get(id) === "ready" && !workspace.moves.has(id);

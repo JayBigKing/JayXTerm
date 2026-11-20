@@ -17,6 +17,14 @@ contextBridge.exposeInMainWorld("api", {
     return () => ipcRenderer.removeListener("window:event", listener);
   },
   sessions: () => ipcRenderer.invoke("sessions:list"),
+  previewSessionImport: (format) => ipcRenderer.invoke("sessions:import-preview", format),
+  applySessionImport: (preview) => ipcRenderer.invoke("sessions:import-apply", preview),
+  exportSshConfig: () => ipcRenderer.invoke("sessions:export-ssh"),
+  settings: () => ipcRenderer.invoke("settings:get"),
+  chooseCache: () => ipcRenderer.invoke("settings:choose-cache"),
+  applySettings: (settings) => ipcRenderer.invoke("settings:apply", settings),
+  passwordHistory: () => ipcRenderer.invoke("password-history:list"),
+  historyPassword: (id) => ipcRenderer.invoke("password-history:select", id),
   reveal: (id) => ipcRenderer.invoke("sessions:reveal", id),
   test: (s) => ipcRenderer.invoke("ssh:test", s),
   encoding: (s) => ipcRenderer.invoke("ssh:encoding", s),
@@ -25,6 +33,10 @@ contextBridge.exposeInMainWorld("api", {
   connect: (s) => ipcRenderer.invoke("ssh:connect", s),
   send: (m) => ipcRenderer.send("ssh:send", m),
   list: (s) => ipcRenderer.invoke("sftp:list", s),
+  shellDirectory: (id) => ipcRenderer.invoke("ssh:directory", id),
+  localDragAvailable: () => ipcRenderer.invoke("local-drag:available"),
+  warmLocalDrag: () => ipcRenderer.send("local-drag:warm"),
+  startLocalDrag: (s) => ipcRenderer.send("local-drag:start", s),
   openRemoteEditor: (s) => ipcRenderer.invoke("editor:open", s),
   drop: (s, files) =>
     ipcRenderer.invoke("sftp:drop", {

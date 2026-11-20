@@ -34,7 +34,10 @@ function installEditorWindows({ ensureOwner, request, connected, didSave }) {
       },
     });
     const id = win.webContents.id;
-    Object.assign(file, { data, remote: data.path, version: data.version, encoding: data.encoding });
+    Object.assign(file, {
+      data, remote: data.path, version: data.version,
+      encoding: data.encoding, eol: data.eol, bom: data.bom,
+    });
     windows.set(id, file);
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -120,7 +123,8 @@ function installEditorWindows({ ensureOwner, request, connected, didSave }) {
 
   async function operate(event, callback) {
     const file = editor(event);
-    if (!connected(file.id)) throw new Error("原 SSH 会话不可用，窗口中仍保留当前内容");
+    if (!connected(file.id))
+      throw new Error("原 SSH 会话不可用。请复制当前修改，再从已连接的会话打开文件");
     if (file.busy) throw new Error("请等待当前文件操作完成");
     file.busy = true;
     try {
@@ -135,19 +139,34 @@ function installEditorWindows({ ensureOwner, request, connected, didSave }) {
       id: file.id, path: file.remote, action: "read-text", encoding: encoding(choice),
     });
     if (data.path !== file.remote) throw new Error("远程目录已更改，请重新打开文件");
-    file.version = data.version;
-    file.encoding = data.encoding;
+    Object.assign(file, { version: data.version, encoding: data.encoding, eol: data.eol, bom: data.bom });
     return data;
   }));
-  ipcMain.handle("editor:save", (event, { text, encoding: choice }) => operate(event, async (file) => {
+  ipcMain.handle("editor:save", (event, { text, encoding: choice, force }) => operate(event, async (file) => {
     if (typeof text !== "string" || text.length > maxFileBytes)
       throw new Error("保存后的文件不能超过 2 MiB");
+    const targetEncoding = encoding(choice);
+    let forceFormat;
+    if (force === true) {
+      const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
+        type: "warning",
+        message: `强制保存 ${file.name}？`,
+        detail: `${file.server} · ${file.remote}\n远端文件会被当前编辑内容覆盖，包括打开后在服务器上发生的修改。`,
+        buttons: ["取消", "强制覆盖"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (response !== 1) return { cancelled: true };
+      if (!connected(file.id)) throw new Error("原 SSH 会话不可用。请复制当前修改，再从已连接的会话打开文件");
+      forceFormat = { eol: file.eol, bom: file.bom };
+    }
     const result = await request({
       id: file.id, path: file.remote, action: "save-text", version: file.version,
-      sourceEncoding: file.encoding, encoding: encoding(choice), text,
+      sourceEncoding: file.encoding, encoding: targetEncoding, text, forceFormat,
     });
     file.version = result.version;
-    file.encoding = choice;
+    file.encoding = targetEncoding;
+    file.bom = file.bom && targetEncoding === "utf-8";
     didSave(file.id, path.posix.dirname(file.path));
     return result;
   }));

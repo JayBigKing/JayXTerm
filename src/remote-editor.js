@@ -1,87 +1,72 @@
-import { basicSetup } from "codemirror";
-import { indentWithTab } from "@codemirror/commands";
-import { Compartment, EditorState, Prec } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
-import { HighlightStyle, StreamLanguage, syntaxHighlighting } from "@codemirror/language";
-import { tags } from "@lezer/highlight";
+import { editor, KeyCode, KeyMod } from "monaco-editor/editor/editor.api.js";
+import EditorWorker from "monaco-editor/editor/editor.worker.js?worker&inline";
+import "monaco-editor/editor/browser/coreCommands.js";
+import "monaco-editor/editor/contrib/bracketMatching/browser/bracketMatching.js";
+import "monaco-editor/editor/contrib/clipboard/browser/clipboard.js";
+import "monaco-editor/editor/contrib/comment/browser/comment.js";
+import "monaco-editor/editor/contrib/contextmenu/browser/contextmenu.js";
+import "monaco-editor/editor/contrib/find/browser/findController.js";
+import "monaco-editor/editor/contrib/folding/browser/folding.js";
+import "monaco-editor/editor/contrib/indentation/browser/indentation.js";
+import "monaco-editor/editor/contrib/linesOperations/browser/linesOperations.js";
+import "monaco-editor/editor/contrib/multicursor/browser/multicursor.js";
+import "monaco-editor/editor/contrib/toggleTabFocusMode/browser/toggleTabFocusMode.js";
+import "monaco-editor/editor/contrib/tokenization/browser/tokenization.js";
+import "monaco-editor/editor/standalone/browser/quickAccess/standaloneGotoLineQuickAccess.js";
+import "monaco-editor/languages/definitions/cpp/register.js";
+import "monaco-editor/languages/definitions/css/register.js";
+import "monaco-editor/languages/definitions/html/register.js";
+import "monaco-editor/languages/definitions/javascript/register.js";
+import "monaco-editor/languages/definitions/markdown/register.js";
+import "monaco-editor/languages/definitions/python/register.js";
+import "monaco-editor/languages/definitions/shell/register.js";
+import "monaco-editor/languages/definitions/typescript/register.js";
+import "monaco-editor/languages/definitions/yaml/register.js";
+import "../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
 import "./remote-editor.css";
 
+self.MonacoEnvironment = {
+  async getWorker(_module, label) {
+    if (label === "json") {
+      const { default: JsonWorker } = await import("monaco-editor/languages/features/json/json.worker.js?worker&inline");
+      return new JsonWorker();
+    }
+    return new EditorWorker();
+  },
+};
+
+editor.defineTheme("jayxterm", {
+  base: "vs-dark",
+  inherit: true,
+  rules: [],
+  colors: {
+    "editor.background": "#15191f",
+    "editor.foreground": "#dce6f4",
+    "editorCursor.foreground": "#a2ffe4",
+    "editor.lineHighlightBackground": "#202836",
+    "editor.selectionBackground": "#32668f",
+    "editor.inactiveSelectionBackground": "#354c61",
+  },
+});
+
 async function languageFor(name) {
-  if (/\.(js|mjs|cjs|jsx|ts|tsx)$/i.test(name)) {
-    const { javascript } = await import("@codemirror/lang-javascript");
-    return ["JavaScript / TypeScript", javascript({
-      jsx: /\.[jt]sx$/i.test(name),
-      typescript: /\.tsx?$/i.test(name),
-    })];
-  }
-  if (/\.(c|cc|cpp|cxx|h|hpp)$/i.test(name)) {
-    const { cpp } = await import("@codemirror/legacy-modes/mode/clike");
-    return ["C / C++", StreamLanguage.define(cpp)];
-  }
-  if (/\.py$/i.test(name)) {
-    const { python } = await import("@codemirror/lang-python");
-    return ["Python", python()];
-  }
+  if (/\.(js|mjs|cjs|jsx)$/i.test(name)) return ["javascript", "JavaScript"];
+  if (/\.(ts|tsx)$/i.test(name)) return ["typescript", "TypeScript"];
+  if (/\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(name)) return ["cpp", "C / C++"];
+  if (/\.py$/i.test(name)) return ["python", "Python"];
   if (/\.json$/i.test(name)) {
-    const { json } = await import("@codemirror/lang-json");
-    return ["JSON", json()];
+    await import("monaco-editor/languages/features/json/register.js");
+    return ["json", "JSON"];
   }
-  if (/\.ya?ml$/i.test(name)) {
-    const { yaml } = await import("@codemirror/lang-yaml");
-    return ["YAML", yaml()];
-  }
-  if (/\.(sh|bash|zsh)$/i.test(name) || /^\.(bash|zsh)(rc|_profile|_aliases)$/.test(name)) {
-    const { shell } = await import("@codemirror/legacy-modes/mode/shell");
-    return ["Shell", StreamLanguage.define(shell)];
-  }
-  if (/\.md$/i.test(name)) {
-    const { markdown } = await import("@codemirror/lang-markdown");
-    return ["Markdown", markdown()];
-  }
-  if (/\.html?$/i.test(name)) {
-    const { html } = await import("@codemirror/legacy-modes/mode/xml");
-    return ["HTML", StreamLanguage.define(html)];
-  }
-  if (/\.css$/i.test(name)) {
-    const { css } = await import("@codemirror/legacy-modes/mode/css");
-    return ["CSS", StreamLanguage.define(css)];
-  }
-  return ["纯文本", []];
+  if (/\.ya?ml$/i.test(name)) return ["yaml", "YAML"];
+  if (/\.(sh|bash|zsh)$/i.test(name) || /^\.(bash|zsh)(rc|_profile|_aliases)$/.test(name))
+    return ["shell", "Shell"];
+  if (/\.md$/i.test(name)) return ["markdown", "Markdown"];
+  if (/\.html?$/i.test(name)) return ["html", "HTML"];
+  if (/\.css$/i.test(name)) return ["css", "CSS"];
+  return ["plaintext", "纯文本"];
 }
 
-const theme = EditorView.theme({
-  "&": { height: "100%", color: "#dce6f4", backgroundColor: "#15191f" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-content": {
-    fontFamily: "Consolas, 'SF Mono', monospace",
-    fontSize: "13px",
-    caretColor: "#79e4cb",
-    padding: "12px 0",
-  },
-  ".cm-line": { padding: "0 12px" },
-  ".cm-gutters": {
-    color: "#8397ad",
-    backgroundColor: "#15191f",
-    borderRight: "1px solid #202c3d",
-  },
-  ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "#202836" },
-  ".cm-cursor": { borderLeft: "2px solid #a2ffe4" },
-  ".cm-selectionBackground": { background: "#354c61" },
-  "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
-    background: "#32668f",
-  },
-  ".cm-panels": { borderColor: "#29374b", backgroundColor: "#121d2b" },
-}, { dark: true });
-const highlighting = syntaxHighlighting(HighlightStyle.define([
-  { tag: tags.comment, color: "#8c9db0" },
-  { tag: [tags.keyword, tags.modifier], color: "#c8adf7" },
-  { tag: [tags.string, tags.regexp], color: "#9bd8b0" },
-  { tag: [tags.number, tags.bool, tags.null], color: "#f2bd88" },
-  { tag: [tags.typeName, tags.tagName, tags.propertyName], color: "#87d6e8" },
-  { tag: [tags.heading, tags.strong], color: "#86e5cd", fontWeight: "bold" },
-  { tag: tags.link, color: "#91c5ff", textDecoration: "underline" },
-  { tag: tags.invalid, color: "#ff9f9f" },
-]));
 const errorText = (error) =>
   error.message.replace(/^Error invoking remote method '[^']+': Error: /, "");
 
@@ -101,24 +86,20 @@ modified.hidden = true;
 modified.title = "有未保存的修改";
 const saveButton = el("button", "editor-save", "保存");
 saveButton.title = "保存到远端 (Ctrl+S)";
-top.append(name, modified, saveButton);
+const forceSaveButton = el("button", "editor-save editor-force-save", "强制保存");
+forceSaveButton.title = "用当前内容覆盖远端文件";
+top.append(name, modified, saveButton, forceSaveButton);
 const breadcrumb = el("div", "editor-path");
 const body = el("div", "editor-body");
 const surface = el("div", "editor-surface");
-const map = el("aside", "editor-map");
-map.hidden = true;
-const canvas = el("canvas");
-const viewport = el("button", "editor-map-viewport");
-viewport.title = "跳转到代码位置";
-viewport.setAttribute("aria-label", "代码缩略图，使用方向键滚动");
-map.append(canvas, viewport);
-body.append(surface, map);
+body.append(surface);
 const footer = el("footer", "editor-status");
 const message = el("span", "editor-message", "正在打开…");
 message.setAttribute("role", "status");
-function setMessage(text) {
+function setMessage(text, failed = false) {
   message.textContent = text;
   message.title = text;
+  message.classList.toggle("editor-error", failed);
 }
 const position = el("span");
 const charset = el("select", "editor-charset");
@@ -136,20 +117,21 @@ const mode = el("span");
 footer.append(message, position, charset, mode);
 root.append(top, breadcrumb, body, footer);
 
-let view, saved, encoding, eol, busy = false, dirty = false;
-const inputLock = new Compartment();
-let mapFrame, mapDirty = true, mapDoc;
-let language = "纯文本", syntax = [];
+let view, savedVersion, encoding, eol;
+let busy = false, dirty = false;
+let languageId = "plaintext", language = "纯文本";
 function updateControls() {
   saveButton.disabled = !view || !dirty || busy;
+  forceSaveButton.disabled = !view || busy;
   charset.disabled = !view || busy;
   if (!view) return;
   currentEncoding.textContent = encoding.toUpperCase();
   charset.value = "";
-  const cursor = view.state.selection.main.head;
-  const line = view.state.doc.lineAt(cursor);
-  position.textContent = `行 ${line.number}，列 ${cursor - line.from + 1}`;
   mode.textContent = `${{ "\r\n": "CRLF", "\r": "CR", "\n": "LF" }[eol]}  ·  ${language}`;
+}
+function updatePosition() {
+  const cursor = view.getPosition();
+  position.textContent = `行 ${cursor.lineNumber}，列 ${cursor.column}`;
 }
 function setDirty(next) {
   if (next === dirty) return;
@@ -158,111 +140,73 @@ function setDirty(next) {
   api.dirty(dirty);
 }
 
-function updateMinimap(contentChanged = false) {
-  mapDirty ||= contentChanged;
-  if (mapFrame) return;
-  mapFrame = requestAnimationFrame(() => {
-    mapFrame = null;
-    if (!view) return;
-    const doc = view.state.doc;
-    map.hidden = doc.lines < 18;
-    if (map.hidden) return;
-    const height = map.clientHeight;
-    const width = map.clientWidth;
-    if (!height || !width) return;
-    if (mapDirty || mapDoc !== doc || canvas.height !== height || canvas.width !== width) {
-      mapDirty = false;
-      mapDoc = doc;
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      const step = Math.max(1, Math.ceil(doc.lines / Math.min(260, Math.max(1, height / 2))));
-      for (let n = 1; n <= doc.lines; n += step) {
-        const line = doc.line(n);
-        const text = doc.sliceString(line.from, Math.min(line.to, line.from + 95));
-        const y = 2 + (n - 1) / doc.lines * (height - 4);
-        for (const match of text.matchAll(/\/\/.*|#[^ ]*|'[^']*'|"[^"]*"|\b\d+\b|[\w\u0080-\uFFFF]+|[^\s\w]/g)) {
-          const token = match[0];
-          ctx.fillStyle = /^\/\/|^#/.test(token) ? "#5c738b" :
-            /^['"]/.test(token) ? "#73ae91" :
-            /^\d/.test(token) ? "#cb9a6e" : "#8a9eb1";
-          ctx.fillRect(3 + match.index, y, Math.max(1, token.length - 0.6), 1);
-        }
-      }
-    }
-    const scroll = view.scrollDOM;
-    const visible = Math.min(height, Math.max(10, height * scroll.clientHeight / scroll.scrollHeight));
-    const offset = scroll.scrollTop / Math.max(1, scroll.scrollHeight - scroll.clientHeight);
-    viewport.style.height = visible + "px";
-    viewport.style.top = (height - visible) * offset + "px";
-  });
+function refreshDirty() {
+  const changed = view.getModel().getAlternativeVersionId() !== savedVersion;
+  if (dirty !== changed) {
+    setDirty(changed);
+    updateControls();
+  }
 }
-map.addEventListener("pointerdown", (event) => {
-  if (!view || event.button !== 0) return;
-  map.setPointerCapture(event.pointerId);
-  seek(event);
-});
-map.addEventListener("pointermove", (event) => {
-  if (map.hasPointerCapture(event.pointerId)) seek(event);
-});
-function seek(event) {
-  const bounds = map.getBoundingClientRect();
-  const scroll = view.scrollDOM;
-  scroll.scrollTop =
-    (event.clientY - bounds.top) / bounds.height * scroll.scrollHeight -
-    scroll.clientHeight / 2;
-}
-viewport.onkeydown = (event) => {
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-  event.preventDefault();
-  view.scrollDOM.scrollTop += view.scrollDOM.clientHeight * (event.key === "ArrowUp" ? -0.5 : 0.5);
-};
-new ResizeObserver(() => updateMinimap(true)).observe(body);
-
 function load(data) {
   encoding = data.encoding;
   eol = data.eol;
-  const state = EditorState.create({
-    doc: data.text,
-    extensions: [
-      basicSetup, theme, highlighting, syntax, inputLock.of([]),
-      keymap.of([indentWithTab]),
-      Prec.highest(keymap.of([{ key: "Mod-s", run: () => { save(); return true; } }])),
-      EditorView.contentAttributes.of({ "aria-label": "文件内容" }),
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged) setDirty(!update.state.doc.eq(saved));
-        if (update.docChanged || update.selectionSet) updateControls();
-        if (update.docChanged || update.geometryChanged || update.viewportChanged)
-          updateMinimap(update.docChanged);
-      }),
-    ],
-  });
-  saved = state.doc;
-  if (view) view.setState(state);
-  else {
-    view = new EditorView({ state, parent: surface });
-    view.scrollDOM.addEventListener("scroll", () => updateMinimap(), { passive: true });
+  if (view) {
+    view.setValue(data.text);
+    view.setPosition({ lineNumber: 1, column: 1 });
+    view.setScrollPosition({ scrollTop: 0, scrollLeft: 0 });
+  } else {
+    view = editor.create(surface, {
+      value: data.text,
+      language: languageId,
+      theme: "jayxterm",
+      ariaLabel: "文件内容",
+      automaticLayout: true,
+      fontFamily: 'Cascadia Mono, Consolas, "SF Mono", monospace',
+      fontSize: 13,
+      cursorWidth: 2,
+      tabSize: 4,
+      minimap: { enabled: true },
+      selectionHighlight: false,
+      occurrencesHighlight: "off",
+      wordBasedSuggestions: "off",
+      quickSuggestions: false,
+      experimentalGpuAcceleration: "off",
+    });
+    view.addCommand(KeyMod.CtrlCmd | KeyCode.KeyS, () => save());
+    view.onDidChangeModelContent(refreshDirty);
+    view.onDidChangeCursorPosition(updatePosition);
   }
-  setDirty(false);
+  savedVersion = view.getModel().getAlternativeVersionId();
+  refreshDirty();
   updateControls();
-  updateMinimap(true);
+  updatePosition();
   view.focus();
 }
 
-async function save(choice = encoding, convert = false) {
-  if (!view || busy || (!dirty && (!convert || choice === encoding))) return;
-  const snapshot = view.state.doc;
+async function save({ choice = encoding, convert = false, force = false } = {}) {
+  if (!view || busy || (!force && !dirty && (!convert || choice === encoding))) return;
+  const model = view.getModel();
+  const snapshot = model.getValue();
+  const version = model.getAlternativeVersionId();
   busy = true;
-  setMessage("正在保存到远端…");
+  setMessage(force ? "正在强制保存…" : "正在保存到远端…");
   updateControls();
   try {
-    await api.save({ text: snapshot.toString(), encoding: choice });
+    const result = await api.save({ text: snapshot, encoding: choice, force });
+    if (result.cancelled) {
+      setMessage("已取消强制保存");
+      return;
+    }
     encoding = choice;
-    saved = snapshot;
-    setDirty(!view.state.doc.eq(saved));
-    setMessage("已保存到远端");
+    savedVersion = version;
+    refreshDirty();
+    setMessage(force ? "已强制保存到远端" : "已保存到远端");
   } catch (error) {
-    setMessage("保存失败：" + errorText(error));
+    const detail = errorText(error);
+    const hint = !force && detail.includes("远程文件已更改")
+      ? "。可保留草稿后重新打开对比，或确认后强制保存"
+      : "";
+    setMessage((force ? "强制保存失败：" : "保存失败：") + detail + hint, true);
   } finally {
     busy = false;
     updateControls();
@@ -270,20 +214,19 @@ async function save(choice = encoding, convert = false) {
 }
 
 saveButton.onclick = () => save();
+forceSaveButton.onclick = () => save({ force: true });
 charset.onchange = async () => {
   const [action, choice] = charset.value.split(":");
   charset.value = "";
   if (!choice || busy) return;
   if (action === "save") {
-    await save(choice, true);
+    await save({ choice, convert: true });
     return;
   }
   if (dirty && !window.confirm("重新读取会丢弃当前未保存的修改。继续？")) return;
   busy = true;
   // Prevent edits made during the reload from being overwritten on completion.
-  view.dispatch({ effects: inputLock.reconfigure([
-    EditorState.readOnly.of(true), EditorView.editable.of(false),
-  ]) });
+  view.updateOptions({ readOnly: true });
   setMessage("正在重新读取…");
   updateControls();
   try {
@@ -292,7 +235,7 @@ charset.onchange = async () => {
   } catch (error) {
     setMessage("重新读取失败：" + errorText(error));
   } finally {
-    view.dispatch({ effects: inputLock.reconfigure([]) });
+    view.updateOptions({ readOnly: false });
     busy = false;
     updateControls();
   }
@@ -301,7 +244,7 @@ charset.onchange = async () => {
 updateControls();
 try {
   const data = await api.initialize();
-  [language, syntax] = await languageFor(data.name);
+  [languageId, language] = await languageFor(data.name);
   name.textContent = data.name;
   breadcrumb.textContent = [data.server, ...data.path.split("/").filter(Boolean)].join("  ›  ");
   breadcrumb.title = data.path;
