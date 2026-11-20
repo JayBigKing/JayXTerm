@@ -60,6 +60,31 @@ test("only legacy defaults follow the new workspace background", (t) => {
   settings.apply({ ...update, backgroundColor: "#394351" });
   assert.equal(open().describe().backgroundColor, "#394351");
 });
+test("terminal preferences migrate, persist, validate and survive unrelated setting updates", (t) => {
+  const { file, open } = setup(t);
+  const initial = open().describe();
+  assert.equal(initial.fontFamily, "Cascadia Mono");
+  assert.equal(initial.fontSize, 14);
+  assert.equal(initial.defaultEncoding, "utf-8");
+  const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
+  open().apply({ ...base, fontFamily: " Consolas ", fontSize: 20, defaultEncoding: "gb2312" });
+  const reloaded = open();
+  assert.equal(reloaded.describe().fontFamily, "Consolas");
+  assert.equal(reloaded.describe().fontSize, 20);
+  assert.equal(reloaded.describe().defaultEncoding, "gb2312");
+  reloaded.apply({ ...base, backgroundColor: "#ffffff" });
+  assert.equal(open().describe().fontSize, 20);
+  const previous = fs.readFileSync(file, "utf8");
+  for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
+    { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" }, { defaultEncoding: "latin1" }]) {
+    assert.throws(() => open().apply({ ...base, ...invalid }), /终端设置/);
+    assert.equal(fs.readFileSync(file, "utf8"), previous);
+  }
+  fs.writeFileSync(file, JSON.stringify({ fontSize: -1, fontFamily: null, defaultEncoding: "invalid" }));
+  assert.equal(open().describe().fontSize, 14);
+  assert.equal(open().describe().fontFamily, "Cascadia Mono");
+  assert.equal(open().describe().defaultEncoding, "utf-8");
+});
 test("cache changes apply on restart and migrate cache folders without copying the user profile", (t) => {
   const { root, profile, open } = setup(t);
   const cache = path.join(profile, "Cache");

@@ -2,11 +2,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHmac, randomBytes, randomUUID } = require("node:crypto");
 const { openStore } = require("./store.cjs");
+const { terminalDefaults, terminalEncodings, validFontFamily, validFontSize } = require("./terminal-settings.mjs");
 
 const cacheFolders = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "ShaderCache"];
 const defaultBackground = "#394351";
 const validBackground = (color) => typeof color === "string" && /^#[\da-f]{6}$/i.test(color);
 const defaults = {
+  ...terminalDefaults,
   cachePath: "", pendingCache: null, cacheError: "",
   saveHistory: false, passwordHistory: [], fileOpen: "double", workspaceBackground: null,
 };
@@ -89,6 +91,9 @@ function openAppSettings(file, defaultCache, safeStorage) {
   function settings() {
     const { backgroundColor: previousBackground, ...saved } = store.get();
     const data = { ...defaults, ...saved };
+    if (!validFontFamily(data.fontFamily)) data.fontFamily = terminalDefaults.fontFamily;
+    if (!validFontSize(data.fontSize)) data.fontSize = terminalDefaults.fontSize;
+    if (!terminalEncodings.includes(data.defaultEncoding)) data.defaultEncoding = terminalDefaults.defaultEncoding;
     // Earlier releases persisted the default whenever any setting was saved.
     if (!Object.hasOwn(saved, "workspaceBackground") && validBackground(previousBackground) &&
         previousBackground.toLowerCase() !== "#eff1f5")
@@ -142,14 +147,20 @@ function openAppSettings(file, defaultCache, safeStorage) {
       return resolveCache(data.cachePath);
     },
     describe() {
-      const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground } = settings();
+      const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground,
+        fontFamily, fontSize, defaultEncoding } = settings();
       return {
         cachePath, pendingCache: pendingCache?.path ?? null, cacheError, saveHistory, fileOpen, defaultCache,
         backgroundColor: validBackground(workspaceBackground) ? workspaceBackground : defaultBackground,
         defaultBackground,
+        fontFamily, fontSize, defaultEncoding,
       };
     },
-    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor }) {
+    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, fontSize, defaultEncoding }) {
+      if ((fontFamily !== undefined && !validFontFamily(fontFamily)) ||
+          (fontSize !== undefined && !validFontSize(fontSize)) ||
+          (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)))
+        throw new Error("无效的终端设置：字号范围为 8–48，编码为 UTF-8、GBK 或 GB2312");
       const data = settings();
       if (saveHistory && !data.saveHistory && !available())
         throw new Error("系统安全存储不可用，无法启用密码历史");
@@ -163,6 +174,9 @@ function openAppSettings(file, defaultCache, safeStorage) {
       data.saveHistory = saveHistory;
       if (!saveHistory) data.passwordHistory = [];
       data.fileOpen = fileOpen;
+      if (fontFamily !== undefined) data.fontFamily = fontFamily.trim();
+      if (fontSize !== undefined) data.fontSize = fontSize;
+      if (defaultEncoding !== undefined) data.defaultEncoding = defaultEncoding;
       if (validBackground(backgroundColor))
         data.workspaceBackground = backgroundColor.toLowerCase() === defaultBackground ? null : backgroundColor;
       store.write(data);

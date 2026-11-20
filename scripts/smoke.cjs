@@ -309,8 +309,12 @@ app.whenReady().then(async () => {
       await require("./workspace-check.cjs").check(w, fixture);
     if (process.env.JAYXTERM_SETTINGS_QA === "1")
       await require("./settings-check.cjs").check(w);
+    if (process.env.JAYXTERM_SETTINGS_QA === "1")
+      await require("./terminal-settings-check.cjs").check(w, fixture);
     if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
       await require("./session-exchange-check.cjs").check(w);
+    if (process.env.JAYXTERM_FEATURES_QA === "1")
+      await require("./features-check.cjs").check(w, fixture);
     await w.webContents.executeJavaScript(
       `(()=>{for(const button of document.querySelectorAll('.tab .close'))button.click();})()`,
     );

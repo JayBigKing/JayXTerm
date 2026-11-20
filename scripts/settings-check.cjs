@@ -40,7 +40,7 @@ async function check(w) {
       if (!document.querySelector(".topbar #settings-open") || color() !== "rgb(57, 67, 81)")
         throw new Error("Missing title bar settings or default background");
       const terminalBackground = terminal();
-      if (terminalBackground !== "rgb(47, 56, 69)" ||
+      if (terminalBackground !== "rgb(57, 67, 81)" ||
           getComputedStyle($(".terminal-pane.active .xterm-viewport")).backgroundColor !== terminalBackground ||
           getComputedStyle($(".window-tools")).backdropFilter !== "none")
         throw new Error("Missing matte terminal or software-friendly toolbar");
@@ -52,10 +52,12 @@ async function check(w) {
       await open();
       pickerColor.value = "#224466";
       pickerColor.dispatchEvent(new Event("input"));
-      if (color() !== "rgb(34, 68, 102)" || terminal() !== terminalBackground)
-        throw new Error("Background preview did not affect the shell only");
+      if (color() !== "rgb(34, 68, 102)" || terminal() !== "rgb(34, 68, 102)" ||
+          getComputedStyle($(".terminal-pane.active .xterm-viewport")).backgroundColor !== terminal())
+        throw new Error("Background preview did not update the terminal and workspace");
       $("#settings-cancel").click();
       await wait(() => color() === "rgb(57, 67, 81)");
+      if (terminal() !== terminalBackground) throw new Error("Cancel did not restore the terminal theme");
       const form = await open();
       $("#settings-choose-cache").click();
       await wait(() => $("#settings-cache").value.endsWith("JayXTerm-cache"));

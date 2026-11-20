@@ -36,3 +36,14 @@ test("encoding switching isolates decoders and leaves UTF-8 bytes for xterm stre
   assert.equal(normalizeEncoding("CP936"), "gbk");
   assert.throws(() => normalizeEncoding("unsupported"));
 });
+test("GB2312 preserves Chinese input, split packets and switching back to UTF-8", () => {
+  const bytes = Buffer.from("d6d0cec4b2e2cad4", "hex");
+  for (let index = 0; index <= bytes.length; index++) {
+    const codec = new TerminalCodec("GB2312");
+    assert.equal(Buffer.concat([codec.decode(bytes.subarray(0, index)), codec.decode(bytes.subarray(index))]).toString(), "中文测试");
+    assert.deepEqual(codec.encode("中文测试"), bytes);
+    codec.setEncoding("utf-8");
+    assert.deepEqual(codec.encode("中文测试"), Buffer.from("中文测试"));
+  }
+  assert.equal(normalizeEncoding("GB-2312"), "gb2312");
+});

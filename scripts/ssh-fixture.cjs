@@ -6,6 +6,7 @@ function createFixture({ readline = false } = {}) {
     inputs = [],
     streams = new Set();
   const directory = { path: null, queries: 0 };
+  const inputRecords = [];
   let authenticated = 0;
   const files = new Map([
       ["/home/jay/README.md", Buffer.from("JayXTerm SFTP fixture\n")],
@@ -14,6 +15,7 @@ function createFixture({ readline = false } = {}) {
   const modes = new Map();
   const modified = new Map();
   const deniedCreates = new Set();
+  const deniedRemovals = new Set();
   const sftpChannels = new Set();
   const clients = new Set();
   const { STATUS_CODE: S } = utils.sftp;
@@ -70,7 +72,10 @@ function createFixture({ readline = false } = {}) {
             const stream = accept();
             streams.add(stream);
             stream.on("close", () => streams.delete(stream));
-            stream.on("data", (data) => inputs.push(Buffer.from(data)));
+            stream.on("data", (data) => {
+              inputs.push(Buffer.from(data));
+              inputRecords.push({ stream, data: Buffer.from(data) });
+            });
             if (readline) {
               shell = require("node:child_process").spawn(
                 "python3",
@@ -194,9 +199,16 @@ function createFixture({ readline = false } = {}) {
               s.status(id, S.OK);
             });
             s.on("REMOVE", (id, p) => {
+              if (deniedRemovals.has(p)) return s.status(id, S.PERMISSION_DENIED);
               modes.delete(p);
               modified.delete(p);
               s.status(id, files.delete(p) ? S.OK : S.NO_SUCH_FILE);
+            });
+            s.on("RMDIR", (id, p) => {
+              if (deniedRemovals.has(p)) return s.status(id, S.PERMISSION_DENIED);
+              if ([...dirs, ...files.keys()].some((entry) => path.posix.dirname(entry) === p))
+                return s.status(id, S.FAILURE);
+              s.status(id, dirs.delete(p) ? S.OK : S.NO_SUCH_FILE);
             });
             s.on("FSTAT", (id, h) =>
               s.attrs(id, attrs(handles.get(h.toString("hex")).path)),
@@ -229,6 +241,7 @@ function createFixture({ readline = false } = {}) {
     server,
     sizes,
     inputs,
+    inputRecords,
     streams,
     directory,
     get authenticated() {
@@ -237,6 +250,7 @@ function createFixture({ readline = false } = {}) {
     files,
     dirs,
     deniedCreates,
+    deniedRemovals,
     async closeSftpChannels() {
       await Promise.all([...sftpChannels].map((channel) => new Promise((resolve) => {
         channel.once("close", resolve);

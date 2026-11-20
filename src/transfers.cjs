@@ -16,6 +16,45 @@ function safeName(name) {
     throw new Error("无法安全保存此文件名：" + name);
   return name;
 }
+function validateRemoteRemoval(remote) {
+  if (typeof remote !== "string" || !remote.startsWith("/") || remote === "/" ||
+      remote.includes("\0") || remote.endsWith("/") || path.posix.normalize(remote) !== remote)
+    throw new Error("无效的远程删除路径，不能删除根目录");
+}
+async function removeRemote(s, remote, directory) {
+  validateRemoteRemoval(remote);
+  let files = 0, directories = 0;
+  async function remove(target, depth) {
+    if (depth > 100) throw new Error("目录层级过深，删除已停止");
+    const stat = await call(s, "lstat", target);
+    const parent = path.posix.dirname(target);
+    if (await call(s, "realpath", parent) !== parent)
+      throw new Error("远程父目录已变化，请刷新后重新删除：" + parent);
+    const isDirectory = stat.isDirectory() && !stat.isSymbolicLink();
+    if (!depth && isDirectory !== directory)
+      throw new Error("远端文件类型已变化，请刷新后重新确认删除");
+    if (isDirectory) {
+      // Resolve each directory before descending; never recurse through a link.
+      if (await call(s, "realpath", target) !== target)
+        throw new Error("远程目录包含符号链接，请从真实路径删除：" + target);
+      const entries = await call(s, "readdir", target);
+      for (const entry of entries) {
+        const name = entry.filename;
+        if (name === "." || name === "..") continue;
+        if (!name || /[\/\0]/.test(name)) throw new Error("无效的远程文件名");
+        await remove(path.posix.join(target, name), depth + 1);
+      }
+      await call(s, "rmdir", target);
+      directories++;
+    } else {
+      // unlink removes a symbolic link itself, without touching its target.
+      await call(s, "unlink", target);
+      files++;
+    }
+  }
+  await remove(remote, 0);
+  return { files, directories };
+}
 async function noLocalLink(local) {
   try {
     const stat = await fs.lstat(local);
@@ -110,7 +149,7 @@ async function transferTree(s, action, local, remote, progress = () => {}, expec
   else throw new Error("未知传输操作");
   return { files, bytes: completed };
 }
-module.exports = { transferTree, safeName };
+module.exports = { transferTree, safeName, validateRemoteRemoval, removeRemote };
 
 async function virtualDragManifest(sftp, remote) {
   const entries = [];

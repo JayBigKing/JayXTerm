@@ -1,5 +1,8 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { applyTheme } from "./theme.mjs";
+import { installSettingsPanel } from "./settings-panel.js";
+import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
 import "./style.css";
 const $ = (s) => document.querySelector(s);
 const api = window.api;
@@ -19,9 +22,9 @@ let fileWorkspaceVersion = 0;
 let fileOpen = "double";
 let localDragAvailable = false;
 let localDragWarmed = false;
-let cacheChoice = "";
-const terminalBackground = getComputedStyle(document.documentElement).getPropertyValue("--terminal-bg").trim();
-let backgroundColor = "#394351";
+let theme = applyTheme("#394351");
+let fontPreferences = { ...terminalDefaults };
+let defaultEncoding = terminalDefaults.defaultEncoding;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -34,45 +37,29 @@ function toast(message) {
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => ($("#toast").style.display = "none"), 6000);
 }
-const settingsForm = $("#settings-form");
-const backgroundInput = $("#settings-background");
 function renderBackground(color) {
-  const channels = color.slice(1).match(/../g).map((hex) => {
-    const value = Number.parseInt(hex, 16) / 255;
-    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  theme = applyTheme(color);
+  for (const tab of tabs.values()) tab.term.options.theme = theme.terminal;
+  api.windowTheme(color);
+}
+function renderTerminalFont(settings) {
+  fontPreferences = { fontFamily: settings.fontFamily, fontSize: settings.fontSize };
+  const options = terminalFont(fontPreferences);
+  for (const tab of tabs.values()) {
+    tab.term.options.fontFamily = options.fontFamily;
+    tab.term.options.fontSize = options.fontSize;
+  }
+  requestAnimationFrame(() => {
+    for (const tab of tabs.values()) fitTerminal(tab);
   });
-  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
-  const dark = luminance < 0.18;
-  const style = document.documentElement.style;
-  style.setProperty("--page-bg", color);
-  style.setProperty("--page-ink", luminance < 0.13 ? "#edf2f8" :
-    dark ? "#fff" : luminance < 0.24 ? "#000" : "#252b38");
-  style.setProperty("--page-muted", luminance < 0.09 ? "#bac6d4" :
-    dark ? "#fff" : luminance < 0.32 ? "#000" : "#525e6e");
 }
-function previewBackground() {
-  $("#settings-background-value").value = backgroundInput.value;
-  renderBackground(backgroundInput.value);
-}
-backgroundInput.oninput = previewBackground;
-$("#settings-default-background").onclick = () => {
-  backgroundInput.value = displayedSettings.defaultBackground;
-  previewBackground();
-};
-$("#settings-dialog").addEventListener("close", () => renderBackground(backgroundColor));
-function renderCacheChoice(settings) {
-  const field = $("#settings-cache");
-  field.value = cacheChoice || settings.defaultCache;
-  field.title = field.value;
-  const pending = cacheChoice !== settings.cachePath;
-  $("#settings-cache-note").textContent = pending
-    ? "下次启动切换至此位置。当前使用 " + (settings.cachePath || settings.defaultCache)
-    : "位置变更在下次启动时生效。";
-}
-let displayedSettings;
+const settingsPanel = installSettingsPanel({ api, previewColor: renderBackground,
+  previewFont: renderTerminalFont, onSave: updateSettings, toast });
 function updateSettings(settings) {
-  backgroundColor = settings.backgroundColor;
-  renderBackground(backgroundColor);
+  settingsPanel.setSaved(settings);
+  renderBackground(settings.backgroundColor);
+  renderTerminalFont(settings);
+  defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
   fileOpen = settings.fileOpen;
   const tab = tabs.get(current);
@@ -83,60 +70,6 @@ function updateSettings(settings) {
     if (fileWorkspaceOpen) renderWorkspaceFiles(group);
   }
 }
-$("#settings-open").onclick = async () => {
-  try {
-    displayedSettings = await api.settings();
-    cacheChoice = displayedSettings.pendingCache ?? displayedSettings.cachePath;
-    settingsForm.elements.saveHistory.checked = displayedSettings.saveHistory;
-    settingsForm.elements.fileOpen.value = displayedSettings.fileOpen;
-    backgroundInput.value = displayedSettings.backgroundColor;
-    $("#settings-background-value").value = backgroundInput.value;
-    $("#settings-error").textContent = displayedSettings.cacheError;
-    renderCacheChoice(displayedSettings);
-    if (!$("#settings-dialog").open) $("#settings-dialog").showModal();
-  } catch (error) {
-    toast(error.message);
-  }
-};
-$("#settings-choose-cache").onclick = async () => {
-  try {
-    const selected = await api.chooseCache();
-    if (selected !== null && $("#settings-dialog").open) {
-      cacheChoice = selected;
-      renderCacheChoice(displayedSettings);
-    }
-  } catch (error) {
-    $("#settings-error").textContent = error.message;
-  }
-};
-$("#settings-default-cache").onclick = () => {
-  cacheChoice = "";
-  renderCacheChoice(displayedSettings);
-};
-$("#settings-cancel").onclick = () => $("#settings-dialog").close();
-settingsForm.onsubmit = async (event) => {
-  event.preventDefault();
-  const button = $("#settings-save");
-  if (button.disabled) return;
-  button.disabled = true;
-  $("#settings-error").textContent = "";
-  try {
-    const result = await api.applySettings({
-      cachePath: cacheChoice,
-      saveHistory: settingsForm.elements.saveHistory.checked,
-      fileOpen: settingsForm.elements.fileOpen.value,
-      backgroundColor: backgroundInput.value,
-    });
-    if (!result) return;
-    updateSettings(result);
-    $("#settings-dialog").close();
-    if (result.pendingCache !== null) toast("缓存位置将在下次启动时切换");
-  } catch (error) {
-    $("#settings-error").textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-};
 function passwordVisibility(field, button, visible) {
   field.type = visible ? "text" : "password";
   button.textContent = visible ? "隐藏" : "显示";
@@ -283,7 +216,7 @@ function edit(s = {}) {
   form.reset();
   editorVersion++;
   passwordVisibility(form.elements.password, $("#toggle-password"), false);
-  form.elements.encoding.value = s.encoding || "utf-8";
+  form.elements.encoding.value = s.encoding || (s.id ? "utf-8" : defaultEncoding);
   $("#test-status").textContent = "";
   $("#test-connection").disabled = false;
   for (const field of ["id", "name", "host", "port", "username", "group"])
@@ -472,6 +405,26 @@ async function connect(session) {
     toast(e.message);
   }
 }
+async function duplicateTab(tab) {
+  if (!tab || tab.moving || tab.duplicating || tab.state !== "已连接") return;
+  tab.duplicating = true;
+  try {
+    const directory = await api.shellDirectory(tab.id).catch(() => null) || tab.shellDirectory;
+    if (!directory) {
+      toast("未能读取 SSH 当前目录，请先使用“同步 SSH 当前目录”，再复制会话");
+      showCwdDialog(tab);
+      return;
+    }
+    if (!tabs.has(tab.id) || tab.moving || tab.state !== "已连接") return;
+    const id = await api.duplicate({ id: tab.id, directory, cols: tab.term.cols, rows: tab.term.rows });
+    focusedGroup = tab.group;
+    createTerminal({ ...tab.session, encoding: tab.encoding }, id);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    tab.duplicating = false;
+  }
+}
 async function terminalClipboard(t, action) {
   if (!t || !tabs.has(t.id) || t.moving) return;
   try {
@@ -501,33 +454,11 @@ function createTerminal(session, id, { moving = false } = {}) {
   const group = focusedGroup || addGroup();
   group.body.append(pane);
   const term = new Terminal({
-    fontFamily: 'Cascadia Mono, Consolas, "Liberation Mono", monospace',
-    fontSize: 14,
+    ...terminalFont(fontPreferences),
     lineHeight: 1.15,
     scrollback: 3000,
     cursorBlink: false,
-    theme: {
-      background: terminalBackground,
-      foreground: "#e5edf7",
-      cursor: "#a0dac1",
-      selectionBackground: "#4a617f",
-      black: "#202733",
-      red: "#ed9ba1",
-      green: "#91cdb2",
-      yellow: "#debf88",
-      blue: "#91b9e7",
-      magenta: "#c5b0de",
-      cyan: "#8fcad3",
-      white: "#cfd9e6",
-      brightBlack: "#a6b5c7",
-      brightRed: "#f4a9ad",
-      brightGreen: "#a0dac1",
-      brightYellow: "#ebce9c",
-      brightBlue: "#a2cced",
-      brightMagenta: "#d6c3ed",
-      brightCyan: "#a0dbe3",
-      brightWhite: "#f3f6fa",
-    },
+    theme: theme.terminal,
     allowProposedApi: false,
   });
   const fit = new FitAddon();
@@ -557,6 +488,7 @@ function createTerminal(session, id, { moving = false } = {}) {
       if (host.startsWith("jayxterm-query-")) {
         if (tab.cwdQuery?.host === host) {
           clearCwdQuery(tab);
+          tab.shellDirectory = decoded;
           loadFiles(tab, decoded);
         }
       } else {
@@ -600,7 +532,7 @@ function createTerminal(session, id, { moving = false } = {}) {
   if (!moving) {
     activate(id);
     setMode("files");
-    term.writeln("\x1b[38;2;114;205;177m正在连接 " + session.host + "…\x1b[0m");
+    term.writeln("\x1b[32m正在连接 " + session.host + "…\x1b[0m");
   }
   return tab;
 }
@@ -745,7 +677,7 @@ function createTabElement(tab) {
   element.onclick = () => activate(tab.id);
   element.oncontextmenu = (event) => {
     event.preventDefault();
-    api.tabMenu(tab.id);
+    api.tabMenu(tab.id).catch((error) => toast(error.message));
   };
   element.onkeydown = (event) => {
     if (
@@ -753,7 +685,7 @@ function createTabElement(tab) {
       (event.shiftKey && event.key === "F10")
     ) {
       event.preventDefault();
-      api.tabMenu(tab.id);
+      api.tabMenu(tab.id).catch((error) => toast(error.message));
     }
   };
   element.dataset.connection = tab.id;
@@ -895,7 +827,7 @@ api.onEvent((m) => {
   } else if (m.type === "ready") {
     t.state = "已连接";
     fitTerminal(t);
-    loadFiles(t, ".");
+    loadFiles(t, m.directory || ".");
     if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
     if (current === t.id) activate(t.id);
   } else if (m.type === "closed" || m.type === "error") {
@@ -972,6 +904,16 @@ function renderFiles(t, list) {
       transfer(t, "download", remoteJoin(t.path, f.name), f.directory);
     };
     row.append(download);
+    const remove = el("button", "delete-one", "删除");
+    remove.type = "button";
+    remove.title = f.directory ? "删除远端目录及其内容" : "删除远端文件";
+    remove.setAttribute("aria-label", "删除 " + f.name);
+    remove.disabled = t.removing || t.moving || t.loading || t.state !== "已连接";
+    remove.onclick = (event) => {
+      event.stopPropagation();
+      deleteRemote(t, remoteJoin(t.path, f.name));
+    };
+    row.append(remove);
     if (localDragAvailable && !f.symlink) {
       const grip = el("button", "local-drag", "↗");
       grip.type = "button";
@@ -1073,6 +1015,30 @@ function showTransfer(t, message) {
   if (t.group.filePanel && t.group.shown === t.id)
     t.group.filePanel.status.textContent = message;
 }
+async function deleteRemote(tab, path) {
+  if (tab.transferring || tab.removing) return toast("请等待当前文件操作完成");
+  tab.removing = true;
+  if (current === tab.id) renderSidebarFiles(tab);
+  if (fileWorkspaceOpen) renderWorkspaceFiles(tab.group);
+  try {
+    const result = await api.removeRemote({ id: tab.id, path });
+    if (!result.cancelled) {
+      showTransfer(tab, `已删除 ${result.files} 个文件、${result.directories} 个目录`);
+      await loadFiles(tab, tab.path);
+    }
+  } catch (error) {
+    toast(error.message);
+    showTransfer(tab, "删除失败：" + error.message);
+    // A recursive delete may have completed some entries before an error.
+    await loadFiles(tab, tab.path);
+  } finally {
+    tab.removing = false;
+    if (tabs.has(tab.id)) {
+      if (current === tab.id) renderSidebarFiles(tab);
+      if (fileWorkspaceOpen) renderWorkspaceFiles(tab.group);
+    }
+  }
+}
 async function transfer(
   t,
   action,
@@ -1082,7 +1048,7 @@ async function transfer(
   token = null,
 ) {
   const tab = tabs.get(t.id);
-  if (!tab || tab.transferring) {
+  if (!tab || tab.transferring || tab.removing) {
     toast("请等待当前传输完成");
     return;
   }
@@ -1338,7 +1304,7 @@ function renderWorkspaceFiles(group) {
   const ready = tab?.state === "已连接" && !tab.moving;
   const previous = panel.rendered;
   const state = { tab, ready, path: tab?.path, files: tab?.files, loading: tab?.loading,
-    status: tab?.state, directoryNote: tab?.workspaceDirectoryNote };
+    status: tab?.state, removing: tab?.removing, directoryNote: tab?.workspaceDirectoryNote };
   if (previous && Object.keys(state).every((key) => state[key] === previous[key])) return;
   panel.rendered = state;
   panel.form.classList.toggle("hidden", !ready);
@@ -1413,6 +1379,10 @@ function markMoving(t, moving) {
     $("#move-tab").disabled = moving || t.state !== "已连接";
 }
 api.onWindow(async (m) => {
+  if (m.type === "duplicate-tab") {
+    await duplicateTab(tabs.get(m.id));
+    return;
+  }
   if (m.type === "local-drag-status") {
     const tab = tabs.get(m.id);
     if (tab) showTransfer(tab, m.message);

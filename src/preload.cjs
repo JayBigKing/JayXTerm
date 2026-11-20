@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("api", {
   moveTab: (s) => ipcRenderer.invoke("windows:move", s),
   tabMenu: (id) => ipcRenderer.invoke("windows:tab-menu", id),
   windowTitle: (name) => ipcRenderer.send("windows:title", name),
+  windowTheme: (color) => ipcRenderer.send("window:theme", color),
   windowReply: (s) => ipcRenderer.send("window:reply", s),
   onWindow: (callback) => {
     const listener = (_e, m) => callback(m);
@@ -31,8 +32,10 @@ contextBridge.exposeInMainWorld("api", {
   save: (s) => ipcRenderer.invoke("sessions:save", s),
   remove: (id) => ipcRenderer.invoke("sessions:delete", id),
   connect: (s) => ipcRenderer.invoke("ssh:connect", s),
+  duplicate: (s) => ipcRenderer.invoke("ssh:duplicate", s),
   send: (m) => ipcRenderer.send("ssh:send", m),
   list: (s) => ipcRenderer.invoke("sftp:list", s),
+  removeRemote: (s) => ipcRenderer.invoke("sftp:remove", s),
   shellDirectory: (id) => ipcRenderer.invoke("ssh:directory", id),
   localDragAvailable: () => ipcRenderer.invoke("local-drag:available"),
   warmLocalDrag: () => ipcRenderer.send("local-drag:warm"),

@@ -24,6 +24,7 @@ import "monaco-editor/languages/definitions/typescript/register.js";
 import "monaco-editor/languages/definitions/yaml/register.js";
 import "../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
 import "./remote-editor.css";
+import { applyTheme } from "./theme.mjs";
 
 self.MonacoEnvironment = {
   async getWorker(_module, label) {
@@ -35,19 +36,11 @@ self.MonacoEnvironment = {
   },
 };
 
-editor.defineTheme("jayxterm", {
-  base: "vs-dark",
-  inherit: true,
-  rules: [],
-  colors: {
-    "editor.background": "#15191f",
-    "editor.foreground": "#dce6f4",
-    "editorCursor.foreground": "#a2ffe4",
-    "editor.lineHighlightBackground": "#202836",
-    "editor.selectionBackground": "#32668f",
-    "editor.inactiveSelectionBackground": "#354c61",
-  },
-});
+function renderTheme(color) {
+  editor.defineTheme("jayxterm", applyTheme(color).editor);
+  editor.setTheme("jayxterm");
+}
+renderTheme("#394351");
 
 async function languageFor(name) {
   if (/\.(js|mjs|cjs|jsx)$/i.test(name)) return ["javascript", "JavaScript"];
@@ -71,6 +64,7 @@ const errorText = (error) =>
   error.message.replace(/^Error invoking remote method '[^']+': Error: /, "");
 
 const api = window.editorApi;
+api.onSettings((settings) => renderTheme(settings.backgroundColor));
 const root = document.querySelector("#remote-editor");
 function el(tag, cls, label) {
   const node = document.createElement(tag);
@@ -244,6 +238,7 @@ charset.onchange = async () => {
 updateControls();
 try {
   const data = await api.initialize();
+  renderTheme(data.backgroundColor);
   [languageId, language] = await languageFor(data.name);
   name.textContent = data.name;
   breadcrumb.textContent = [data.server, ...data.path.split("/").filter(Boolean)].join("  ›  ");
