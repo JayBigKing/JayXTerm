@@ -1,8 +1,8 @@
 import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
 
 // Add sections in the markup and fields here; loading/saving and navigation stay shared.
-const fields = ["backgroundColor", "fontFamily", "fontSize", "defaultEncoding", "fileOpen", "saveHistory"];
-export function installSettingsPanel({ api, previewColor, previewFont, onSave, toast }) {
+const fields = ["backgroundColor", "fontFamily", "fontSize", "defaultEncoding", "highlightKeywords", "fileOpen", "saveHistory"];
+export function installSettingsPanel({ api, previewColor, previewFont, previewKeywords, onSave, toast }) {
   const $ = (selector) => document.querySelector(selector);
   const dialog = $("#settings-dialog"), form = $("#settings-form");
   let saved, displayed, cacheChoice = "";
@@ -39,12 +39,13 @@ export function installSettingsPanel({ api, previewColor, previewFont, onSave, t
     $("#settings-background-value").value = input.backgroundColor;
     previewColor(input.backgroundColor);
     previewFont(input);
+    previewKeywords(input.highlightKeywords);
     Object.assign($("#settings-font-preview").style, {
       fontFamily: terminalFont(input).fontFamily,
       fontSize: terminalFont(input).fontSize + "px",
     });
   }
-  for (const name of ["backgroundColor", "fontFamily", "fontSize"])
+  for (const name of ["backgroundColor", "fontFamily", "fontSize", "highlightKeywords"])
     form.elements[name].oninput = preview;
   function renderCache() {
     const field = $("#settings-cache");
@@ -87,7 +88,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, onSave, t
   $("#settings-default-cache").onclick = () => { cacheChoice = ""; renderCache(); };
   $("#settings-cancel").onclick = () => dialog.close();
   dialog.addEventListener("close", () => {
-    if (saved) { previewColor(saved.backgroundColor); previewFont(saved); }
+    if (saved) { previewColor(saved.backgroundColor); previewFont(saved); previewKeywords(saved.highlightKeywords); }
   });
   // Invalid inputs may live in an inactive section. Reveal them before browser validation.
   form.addEventListener("invalid", (event) => {

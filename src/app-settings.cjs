@@ -94,6 +94,7 @@ function openAppSettings(file, defaultCache, safeStorage) {
     if (!validFontFamily(data.fontFamily)) data.fontFamily = terminalDefaults.fontFamily;
     if (!validFontSize(data.fontSize)) data.fontSize = terminalDefaults.fontSize;
     if (!terminalEncodings.includes(data.defaultEncoding)) data.defaultEncoding = terminalDefaults.defaultEncoding;
+    if (typeof data.highlightKeywords !== "boolean") data.highlightKeywords = true;
     // Earlier releases persisted the default whenever any setting was saved.
     if (!Object.hasOwn(saved, "workspaceBackground") && validBackground(previousBackground) &&
         previousBackground.toLowerCase() !== "#eff1f5")
@@ -148,18 +149,19 @@ function openAppSettings(file, defaultCache, safeStorage) {
     },
     describe() {
       const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground,
-        fontFamily, fontSize, defaultEncoding } = settings();
+        fontFamily, fontSize, defaultEncoding, highlightKeywords } = settings();
       return {
         cachePath, pendingCache: pendingCache?.path ?? null, cacheError, saveHistory, fileOpen, defaultCache,
         backgroundColor: validBackground(workspaceBackground) ? workspaceBackground : defaultBackground,
         defaultBackground,
-        fontFamily, fontSize, defaultEncoding,
+        fontFamily, fontSize, defaultEncoding, highlightKeywords,
       };
     },
-    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, fontSize, defaultEncoding }) {
+    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, fontSize, defaultEncoding, highlightKeywords }) {
       if ((fontFamily !== undefined && !validFontFamily(fontFamily)) ||
           (fontSize !== undefined && !validFontSize(fontSize)) ||
-          (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)))
+          (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)) ||
+          (highlightKeywords !== undefined && typeof highlightKeywords !== "boolean"))
         throw new Error("无效的终端设置：字号范围为 8–48，编码为 UTF-8、GBK 或 GB2312");
       const data = settings();
       if (saveHistory && !data.saveHistory && !available())
@@ -177,6 +179,7 @@ function openAppSettings(file, defaultCache, safeStorage) {
       if (fontFamily !== undefined) data.fontFamily = fontFamily.trim();
       if (fontSize !== undefined) data.fontSize = fontSize;
       if (defaultEncoding !== undefined) data.defaultEncoding = defaultEncoding;
+      if (highlightKeywords !== undefined) data.highlightKeywords = highlightKeywords;
       if (validBackground(backgroundColor))
         data.workspaceBackground = backgroundColor.toLowerCase() === defaultBackground ? null : backgroundColor;
       store.write(data);

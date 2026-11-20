@@ -393,7 +393,7 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 14px 13px;
+  padding: 7px 12px;
 }
 .file-heading strong {
   font-size: 12px;
@@ -414,7 +414,7 @@ h1 {
   font:
     11px Consolas,
     monospace;
-  padding: 8px;
+  padding: 5px 7px;
   width: 100%;
 }
 .pathbar button {
@@ -423,11 +423,11 @@ h1 {
 .file-actions {
   display: flex;
   gap: 6px;
-  padding: 8px 12px;
+  padding: 5px 10px;
 }
 .file-actions button {
   font-size: 10px;
-  padding: 6px 10px;
+  padding: 4px 7px;
   border-color: transparent;
 }
 .file-list {
@@ -443,14 +443,23 @@ h1 {
   background: none;
   border: 0;
   border-radius: 4px;
-  padding: 10px 8px;
+  min-height: 28px;
+  padding: 3px 6px;
   text-align: left;
   font-size: 11px;
 }
 .file-row .file-icon {
-  color: var(--success);
-  font-size: 15px;
+  color: var(--muted);
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  flex: 0 0 17px;
 }
+.file-icon svg { width: 100%; height: 100%; }
+.file-row .file-icon[data-file-kind="folder"], .file-row .file-icon[data-file-kind="archive"] { color: var(--warning); }
+.file-row .file-icon[data-file-kind="code"], .file-row .file-icon[data-file-kind="config"], .file-row .file-icon[data-file-kind="database"] { color: var(--accent); }
+.file-row .file-icon[data-file-kind="shell"], .file-row .file-icon[data-file-kind="image"], .file-row .file-icon[data-file-kind="media"] { color: var(--success); }
+.file-row .file-icon[data-file-kind="pdf"] { color: var(--danger); }
 .file-row .filename {
   flex: 1;
   overflow: hidden;
@@ -625,6 +634,8 @@ button:disabled {
 .file-row .download-one { margin-left: auto; }
 .file-row .delete-one { color: var(--danger); white-space: nowrap; font-size: 11px; }
 .file-row .delete-one:hover { background: var(--danger-bg); }
+.file-row .delete-one { display: inline-flex; align-items: center; justify-content: center; width: 23px; height: 22px; padding: 3px; flex-shrink: 0; }
+.delete-one svg, .vault-remove svg { width: 15px; height: 15px; }
 .file-row .local-drag { cursor: grab; }
 .file-row .local-drag:active { cursor: grabbing; }
 .file-row .local-drag:hover { color: var(--page-ink); }
@@ -632,7 +643,7 @@ button:disabled {
   min-width: 0;
 }
 .file-list .file-row {
-  gap: 7px;
+  gap: 5px;
 }
 select {
   font: inherit;
@@ -661,6 +672,8 @@ select {
   border: 0;
   font-size: 11px;
 }
+.password-field:has(.password-book-button) input { padding-right: 119px; }
+.password-field button.password-book-button { right: 50px; color: var(--accent); }
 .statusbar select {
   width: auto;
   margin: 0;
@@ -1011,6 +1024,48 @@ dialog pre {
 .settings-footer { padding: 12px 26px 18px; border-top: 1px solid var(--line); }
 .settings-footer .dialog-actions { margin-top: 10px; }
 .settings-footer .error:empty { display: none; }
+.keyword-legend { display: flex; flex-wrap: wrap; gap: 7px 16px; }
+.keyword-info { color: var(--accent); }
+.statusbar > span:last-child { display: flex; align-items: center; }
+.statusbar #terminal-search-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.statusbar button[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
+.statusbar svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.app-content main { position: relative; }
+.terminal-search { position: absolute; z-index: 10; bottom: 8px; right: 14px; display: flex; align-items: center; gap: 5px; padding: 7px; max-width: calc(100% - 28px); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 4px 18px #0003; }
+.terminal-search[hidden] { display: none; }
+.terminal-search input { width: 220px; min-width: 100px; padding: 6px 8px; font-size: 12px; }
+.terminal-search button { padding: 4px 7px; flex-shrink: 0; }
+.terminal-search button[aria-pressed="true"] { color: var(--accent); background: var(--hover); }
+.terminal-search output { color: var(--muted); font-size: 11px; min-width: 48px; text-align: center; white-space: nowrap; }
+.vault-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vault-heading strong { font-weight: 550; }
+.vault-heading button { font-size: 12px; padding: 6px 10px; }
+.vault-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.vault-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(80px, 1fr) auto auto auto; align-items: center; gap: 5px; padding: 9px; background: var(--chrome); border: 1px solid var(--line); border-radius: 7px; }
+.vault-description { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vault-secret { min-width: 0; width: 100%; padding: 5px 6px; font: 12px Consolas, monospace; }
+.vault-row button { padding: 4px 5px; border: 0; background: transparent; font-size: 11px; }
+.vault-row .vault-remove { color: var(--danger); }
+.vault-row .vault-remove { display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px; }
+.settings-divider { border: 0; border-top: 1px solid var(--line); margin: 24px 0 18px; }
+#vault-note:empty, #quick-password-error:empty { display: none; }
+#quick-password-editor { width: min(430px, calc(100vw - 32px)); }
+.password-picker { position: fixed; margin: 0; width: min(344px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; padding: 12px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 6px 24px #0004; }
+.password-picker[data-anchor="cursor"] { width: min(300px, calc(100vw - 24px)); padding: 10px; }
+.password-picker-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.password-picker-heading button { padding: 1px 6px; border: 0; background: transparent; }
+.password-picker .form-note { margin: 7px 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+#quick-password-filter { width: 100%; padding: 7px 8px; font-size: 12px; margin: 3px 0 6px; }
+#quick-password-options { max-height: 200px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.quick-password-option { display: flex; justify-content: space-between; gap: 14px; align-items: center; text-align: left; padding: 8px; border: 0; background: transparent; font-size: 12px; }
+.quick-password-option span { min-width: 0; overflow-wrap: anywhere; }
+.quick-password-option small { color: var(--muted); white-space: nowrap; }
+.quick-password-option[aria-selected="true"], .quick-password-option:hover { background: var(--hover); }
+#quick-password-manage { width: 100%; padding: 8px 0 0; margin-top: 8px; border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; text-align: left; color: var(--accent); font-size: 11px; }
+@media (max-width: 760px) {
+  .vault-row { grid-template-columns: minmax(70px, 1fr) auto auto auto; }
+  .vault-description { grid-column: 1 / -1; }
+}
 @media (max-width: 760px) {
   .topbar { grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
   #workspace-title { display: none; }

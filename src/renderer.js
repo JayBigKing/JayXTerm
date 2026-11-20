@@ -3,6 +3,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { applyTheme } from "./theme.mjs";
 import { installSettingsPanel } from "./settings-panel.js";
 import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
+import { installKeywordHighlights } from "./terminal-keywords.mjs";
+import { installTerminalSearch } from "./terminal-search.js";
+import { fileIcon, trashIcon } from "./file-icons.js";
+import { installQuickPasswords } from "./quick-passwords.js";
 import "./style.css";
 const $ = (s) => document.querySelector(s);
 const api = window.api;
@@ -25,6 +29,7 @@ let localDragWarmed = false;
 let theme = applyTheme("#394351");
 let fontPreferences = { ...terminalDefaults };
 let defaultEncoding = terminalDefaults.defaultEncoding;
+let highlightKeywords = true;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -39,7 +44,11 @@ function toast(message) {
 }
 function renderBackground(color) {
   theme = applyTheme(color);
-  for (const tab of tabs.values()) tab.term.options.theme = theme.terminal;
+  for (const tab of tabs.values()) {
+    tab.term.options.theme = theme.terminal;
+    tab.highlights.setTheme(theme);
+  }
+  terminalSearch.refreshTheme();
   api.windowTheme(color);
 }
 function renderTerminalFont(settings) {
@@ -54,11 +63,21 @@ function renderTerminalFont(settings) {
   });
 }
 const settingsPanel = installSettingsPanel({ api, previewColor: renderBackground,
-  previewFont: renderTerminalFont, onSave: updateSettings, toast });
+  previewFont: renderTerminalFont, previewKeywords: renderKeywordHighlights, onSave: updateSettings, toast });
+function renderKeywordHighlights(enabled) {
+  highlightKeywords = enabled;
+  for (const tab of tabs.values()) tab.highlights.setEnabled(enabled);
+}
+function showTerminal() {
+  if (fileWorkspaceOpen) toggleFileWorkspace(false);
+}
+const terminalSearch = installTerminalSearch({ getActiveTab: () => tabs.get(current), showTerminal, getTheme: () => theme });
+const quickPasswords = installQuickPasswords({ api, getActiveTab: () => tabs.get(current), showTerminal, toast });
 function updateSettings(settings) {
   settingsPanel.setSaved(settings);
   renderBackground(settings.backgroundColor);
   renderTerminalFont(settings);
+  renderKeywordHighlights(settings.highlightKeywords);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
   fileOpen = settings.fileOpen;
@@ -459,7 +478,8 @@ function createTerminal(session, id, { moving = false } = {}) {
     scrollback: 3000,
     cursorBlink: false,
     theme: theme.terminal,
-    allowProposedApi: false,
+    // xterm's search and keyword decorations use its buffer/marker API.
+    allowProposedApi: true,
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -478,6 +498,8 @@ function createTerminal(session, id, { moving = false } = {}) {
     files: [],
     loadVersion: 0,
   };
+  tab.highlights = installKeywordHighlights(term, theme, highlightKeywords);
+  tab.passwordPrompt = quickPasswords.watch(tab);
   term.parser.registerOscHandler(7, (value) => {
     const match = /^file:\/\/([^/]*)(\/[^\x00-\x1f]*)$/.exec(value);
     if (!match) return true;
@@ -523,6 +545,7 @@ function createTerminal(session, id, { moving = false } = {}) {
       .catch((error) => toast(error.message));
   };
   term.onData((data) => {
+    quickPasswords.userInput(tab);
     if (!tab.moving) api.send({ type: "input", id, data });
   });
   term.onResize(
@@ -731,6 +754,7 @@ function fitTerminal(t) {
       cols: t.term.cols,
       rows: t.term.rows,
     });
+  t.highlights.refresh();
 }
 function activate(id, focus = true) {
   current = id;
@@ -752,6 +776,8 @@ function activate(id, focus = true) {
     ? "＋ 新建会话"
     : "＋ 添加第一台服务器";
   renderTabs();
+  terminalSearch.activate();
+  quickPasswords.activate();
   if (t) {
     if (!fileWorkspaceOpen)
       requestAnimationFrame(() => {
@@ -779,6 +805,9 @@ function closeTab(id, disconnect = true) {
   }
   if (disconnect) api.send({ type: "disconnect", id });
   clearCwdQuery(t);
+  terminalSearch.remove(t);
+  t.highlights.dispose();
+  t.passwordPrompt.dispose();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
@@ -833,6 +862,7 @@ api.onEvent((m) => {
   } else if (m.type === "closed" || m.type === "error") {
     clearCwdQuery(t);
     t.state = m.type === "closed" ? "已断开" : "连接出错";
+    quickPasswords.activate();
     if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
     t.term.writeln("\r\n\x1b[31m" + (m.message || "连接已关闭") + "\x1b[0m");
     if (current === t.id)
@@ -893,7 +923,7 @@ function renderFiles(t, list) {
       : f.symlink ? "双击下载文件" : gesture + "编辑；右侧 ↓ 下载文件";
     if (f.directory) row.dataset.directory = remoteJoin(t.path, f.name);
     row.append(
-      el("span", "file-icon", f.directory ? "▸" : f.symlink ? "↗" : "▫"),
+      fileIcon(f),
       el("span", "filename", f.name),
       el("small", "", f.directory ? "目录" : size(f.size)),
     );
@@ -904,7 +934,8 @@ function renderFiles(t, list) {
       transfer(t, "download", remoteJoin(t.path, f.name), f.directory);
     };
     row.append(download);
-    const remove = el("button", "delete-one", "删除");
+    const remove = el("button", "delete-one");
+    remove.append(trashIcon());
     remove.type = "button";
     remove.title = f.directory ? "删除远端目录及其内容" : "删除远端文件";
     remove.setAttribute("aria-label", "删除 " + f.name);
@@ -1353,7 +1384,7 @@ async function syncWorkspaceDirectory(tab) {
   tab.workspaceDirectoryNote = "未能同步 SSH 当前目录，已保留原目录";
   renderWorkspaceFiles(tab.group);
 }
-$("#file-workspace-toggle").onclick = () => {
+function toggleFileWorkspace(focus = true) {
   fileWorkspaceOpen = !fileWorkspaceOpen;
   fileWorkspaceVersion++;
   $("#terminal-area").classList.toggle("show-file-space", fileWorkspaceOpen);
@@ -1361,7 +1392,7 @@ $("#file-workspace-toggle").onclick = () => {
   button.querySelector("span").textContent = fileWorkspaceOpen ? "返回终端" : "文件空间";
   button.setAttribute("aria-pressed", String(fileWorkspaceOpen));
   highlightDropTarget(null);
-  activate(current, !fileWorkspaceOpen);
+  activate(current, !fileWorkspaceOpen && focus);
   if (!fileWorkspaceOpen)
     requestAnimationFrame(() => {
       for (const group of groups) {
@@ -1369,11 +1400,13 @@ $("#file-workspace-toggle").onclick = () => {
         if (tab && tab.id !== current) fitTerminal(tab);
       }
     });
-};
+}
+$("#file-workspace-toggle").onclick = () => toggleFileWorkspace();
 function markMoving(t, moving) {
   t.moving = moving;
   t.term.options.disableStdin = moving;
   t.pane.classList.toggle("moving", moving);
+  quickPasswords.activate();
   if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
   if (current === t.id)
     $("#move-tab").disabled = moving || t.state !== "已连接";

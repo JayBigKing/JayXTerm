@@ -9,7 +9,7 @@ process.env.JAYXTERM_QA = "1";
 app.on("browser-window-created", (_event, win) => {
   win.webContents.setBackgroundThrottling(false);
 });
-for (const name of ["sessions.json", "settings.json"])
+for (const name of ["sessions.json", "settings.json", "quick-passwords.json"])
   fs.rmSync(path.resolve(".codex-cache/qa/profile", name), { force: true });
 require("../src/main.cjs");
 app.whenReady().then(async () => {
@@ -334,6 +334,10 @@ app.whenReady().then(async () => {
       await runCheck("terminal settings", "./terminal-settings-check.cjs", w, fixture);
     if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
       await runCheck("session import/export", "./session-exchange-check.cjs", w);
+    if (process.env.JAYXTERM_ASSIST_QA === "1") {
+      await runCheck("keyword highlights, terminal search and file icons", "./terminal-assistance-check.cjs", w, fixture);
+      await runCheck("quick password vault and prompt suggestions", "./quick-passwords-check.cjs", w, fixture);
+    }
     if (process.env.JAYXTERM_FEATURES_QA === "1")
       await runCheck(
         "themes, remote deletion and session duplication",

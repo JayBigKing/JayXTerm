@@ -87,6 +87,14 @@
           </aside>
         </aside>
         <main>
+          <form id="terminal-search" class="terminal-search" role="search" aria-label="搜索当前终端" hidden>
+            <input id="terminal-search-input" type="search" placeholder="搜索当前终端及历史输出" aria-label="终端搜索内容" autocomplete="off" maxlength="1000" />
+            <button id="terminal-search-case" type="button" aria-label="区分大小写" title="区分大小写" aria-pressed="false">Aa</button>
+            <output id="terminal-search-count" aria-live="polite">0 / 0</output>
+            <button id="terminal-search-previous" type="button" aria-label="上一个匹配" title="上一个（Shift+Enter）">↑</button>
+            <button id="terminal-search-next" type="button" aria-label="下一个匹配" title="下一个（Enter）">↓</button>
+            <button id="terminal-search-close" type="button" aria-label="关闭终端搜索" title="关闭（Esc）">×</button>
+          </form>
           <div id="welcome" class="welcome">
             <div class="welcome-inner">
               <div class="eyebrow">YOUR SERVERS. ONE WORKSPACE.</div>
@@ -105,7 +113,9 @@
       <footer class="statusbar">
           <span id="status">就绪</span
           ><span
-            ><select id="terminal-encoding" aria-label="当前终端编码" disabled>
+            ><button id="terminal-passwords" type="button" aria-expanded="false" aria-controls="quick-password-picker" title="选择快捷密码填入当前终端并提交" disabled>密码本</button>
+            <button id="terminal-search-toggle" type="button" aria-expanded="false" aria-controls="terminal-search" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>搜索</button>
+            <select id="terminal-encoding" aria-label="当前终端编码" disabled>
               <option value="utf-8">UTF-8</option>
               <option value="gbk">GBK / CP936</option>
               <option value="gb2312">GB2312</option></select
@@ -175,6 +185,9 @@
               <label for="settings-default-encoding">新会话默认编码</label>
               <select id="settings-default-encoding" name="defaultEncoding"><option value="utf-8">UTF-8</option><option value="gbk">GBK / CP936</option><option value="gb2312">GB2312</option></select>
               <p class="form-note">仅影响新建会话。已有连接可在窗口底栏切换编码，也可在会话配置中更改。</p>
+              <label class="check"><input id="settings-highlight-keywords" name="highlightKeywords" type="checkbox" checked />高亮日志关键词</label>
+              <p class="form-note keyword-legend"><span class="success">Success / Passed</span><span class="error">Fail / Error</span><span class="warning">Warning / Timeout</span><span class="keyword-info">Info / Debug</span></p>
+              <p class="form-note">匹配不区分大小写，支持中文成功、失败、错误、警告和超时；保留原始输出。Vim 等全屏程序使用自身配色。</p>
             </section>
             <section id="settings-files" role="tabpanel" aria-labelledby="settings-tab-files" hidden>
               <h3>文件与存储</h3>
@@ -186,8 +199,14 @@
             </section>
             <section id="settings-passwords" role="tabpanel" aria-labelledby="settings-tab-passwords" hidden>
               <h3>密码</h3>
+              <div class="vault-heading"><strong>快捷密码本</strong><button id="vault-add" type="button">＋ 新增密码</button></div>
+              <p class="form-note">为密码添加描述，例如「虚拟机1」。使用此电脑的系统安全存储加密，密码修改即时保存。</p>
+              <div id="vault-list" class="vault-list" aria-label="已保存的快捷密码"></div>
+              <p id="vault-note" class="form-note" role="status"></p>
+              <p class="form-note">连接密码框可选择描述填入。检测到 Shell 密码提示时，在光标旁显示候选；↑/↓ 选择，Enter 或点选后填入并提交，Esc 关闭。</p>
+              <hr class="settings-divider" />
               <label class="check"><input name="saveHistory" type="checkbox" />加密保存历史密码</label>
-              <p class="form-note">默认关闭。关闭并保存设置会清空历史密码本。各会话保存的密码独立管理。</p>
+              <p class="form-note">默认关闭。关闭并保存设置会清空自动记录的历史密码。快捷密码本和各会话保存的密码独立管理。</p>
             </section>
           </div>
         </div>
@@ -197,6 +216,24 @@
         </footer>
       </form>
     </dialog>
+    <dialog id="quick-password-editor" aria-labelledby="quick-password-editor-title">
+      <form id="quick-password-form">
+        <h2 id="quick-password-editor-title">新增快捷密码</h2>
+        <input name="id" type="hidden" />
+        <label>描述<input id="quick-password-description" name="description" placeholder="例如：虚拟机1" maxlength="80" required autocomplete="off" /></label>
+        <label>密码<div class="password-field"><input id="quick-password-secret" name="password" type="password" maxlength="4096" autocomplete="new-password" required /><button id="quick-password-reveal" type="button" aria-pressed="false">显示</button></div></label>
+        <p id="quick-password-editor-note" class="form-note">保存后可以按描述选择并填入。</p>
+        <p id="quick-password-error" class="error" role="alert"></p>
+        <div class="dialog-actions"><button id="quick-password-cancel" type="button">取消</button><button id="quick-password-save" type="submit" class="primary">保存密码</button></div>
+      </form>
+    </dialog>
+    <div id="quick-password-picker" class="password-picker" popover="manual" role="dialog" aria-label="选择快捷密码">
+      <div class="password-picker-heading"><strong>选择快捷密码</strong><button id="quick-password-picker-close" type="button" aria-label="关闭密码列表">×</button></div>
+      <p id="quick-password-target" class="form-note"></p>
+      <input id="quick-password-filter" placeholder="筛选密码描述" aria-label="筛选密码描述" autocomplete="off" />
+      <div id="quick-password-options" role="listbox" aria-label="密码描述"></div>
+      <button id="quick-password-manage" type="button">管理快捷密码…</button>
+    </div>
     <dialog id="editor">
       <form id="session-form">
         <div class="dialog-heading">
@@ -248,6 +285,7 @@
             /><button type="button" id="toggle-password" aria-pressed="false">
               显示
             </button>
+            <button type="button" id="session-quick-password" class="password-book-button" title="选择快捷密码">密码本</button>
           </div></label
         ><label
           >历史密码<select id="session-password-history" aria-label="历史密码" disabled>
@@ -286,6 +324,7 @@
         <div class="password-field">
           <input id="connect-password" type="password" placeholder="输入连接密码" required autocomplete="off" />
           <button type="button" id="toggle-connect-password" aria-pressed="false">显示</button>
+          <button type="button" id="connect-quick-password" class="password-book-button" title="选择快捷密码">密码本</button>
         </div>
         <label>历史密码<select id="connect-password-history" aria-label="历史密码" disabled>
           <option value="">无密码记录</option>

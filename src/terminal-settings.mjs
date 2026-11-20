@@ -2,6 +2,7 @@ export const terminalDefaults = {
   fontFamily: "Cascadia Mono",
   fontSize: 14,
   defaultEncoding: "utf-8",
+  highlightKeywords: true,
 };
 export const terminalEncodings = ["utf-8", "gbk", "gb2312"];
 export const validFontFamily = (value) => typeof value === "string" && value.trim().length > 0 &&
