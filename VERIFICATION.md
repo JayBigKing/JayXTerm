@@ -1,5 +1,13 @@
 # 初版验证记录
 
+## 2026-11-21：Windows CI 冒烟测试超时
+
+- [PR #1 的失败构建](https://github.com/JayBigKing/JayXTerm/actions/runs/44745513659) 已完成 Vite 构建、19 项测试、拖放和设置检查，随后在终端设置检查中达到 120 秒总超时。日志中的错误密码认证失败来自预期的拒绝测试。
+- Windows 本机对旧 smoke 入口执行最小化对照检查：页面变为 `hidden`，字号预览已变为 `22px`，终端列数仍为原来的 `128`，15 秒后探针报告失败。后台节流使终端重排所需的动画帧停止，并拖慢页面内轮询。
+- smoke 入口为所有测试窗口关闭后台节流，增加阶段名称、耗时及失败阶段日志。Windows 终端设置检查主动最小化工作台，覆盖字体预览、取消、保存、重排和跨窗口同步，并在清理时恢复窗口。
+- 修复后在 Windows、Node.js 24.16、Electron 42.8.1 上通过 19 项单元及 SSH 集成测试；启用 CI 同样的 `JAYXTERM_LOCAL_DRAG_QA=1`、`JAYXTERM_SESSION_EXCHANGE_QA=1`、`JAYXTERM_SETTINGS_QA=1`、`JAYXTERM_FEATURES_QA=1` 后执行 `scripts/windows.ps1 smoke`，Vite 构建及完整界面检查通过，冒烟阶段约 11 秒。
+- `scripts/windows.ps1 package` 成功生成 Windows x64 安装版和便携版；`node scripts/native-drag-check.cjs` 的 Windows Shell 原生拖放数据格式检查通过。
+
 ## 2026-11-20：整体配色、远端删除、同目录复制与终端设置
 
 - Windows 本机 Node.js 24.16、Electron 42.8.1：19 项单元和 SSH 集成测试通过，Vite 生产构建通过。

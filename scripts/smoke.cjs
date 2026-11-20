@@ -4,15 +4,31 @@ const { createFixture } = require("./ssh-fixture.cjs");
 const fs = require("node:fs");
 const path = require("node:path");
 process.env.JAYXTERM_QA = "1";
+// CI can cover or minimize windows. Keep renderer polling and animation-frame
+// layout checks running in every smoke-test workspace and editor window.
+app.on("browser-window-created", (_event, win) => {
+  win.webContents.setBackgroundThrottling(false);
+});
 for (const name of ["sessions.json", "settings.json"])
   fs.rmSync(path.resolve(".codex-cache/qa/profile", name), { force: true });
 require("../src/main.cjs");
 app.whenReady().then(async () => {
+  const started = Date.now();
+  let stage;
+  const markStage = (name) => {
+    stage = name;
+    console.log(`[smoke +${((Date.now() - started) / 1000).toFixed(1)}s] ${stage}`);
+  };
+  const runCheck = async (name, file, ...args) => {
+    markStage(name);
+    await require(file).check(...args);
+  };
   const deadline = setTimeout(() => {
-    console.error("Application smoke test timed out");
+    console.error(`Application smoke test timed out during: ${stage}`);
     app.exit(1);
   }, 120000);
   try {
+    markStage("renderer startup");
     const w = BrowserWindow.getAllWindows()[0];
     if (w.webContents.isLoading())
       await new Promise((r) => w.webContents.once("did-finish-load", r));
@@ -22,6 +38,7 @@ app.whenReady().then(async () => {
     const { server } = fixture;
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     dialog.showMessageBox = async () => ({ response: 1 });
+    markStage("SSH connection tests (wrong-password rejection is expected)");
     await w.webContents.executeJavaScript(`(async()=>{
       if(!window.api || !document.querySelector('#new')) throw new Error('Renderer did not initialize');
       await new Promise(r=>setTimeout(r,300));
@@ -44,6 +61,7 @@ app.whenReady().then(async () => {
         throw new Error('Generated session name or saved credential missing');
       if(sessions.some(s=>s.password))throw new Error('Password leaked to renderer');
     })()`);
+    markStage("credential reveal and encrypted persistence");
     await w.webContents.executeJavaScript(`(async()=>{
       document.querySelector('.session .session-tools').children[1].click();
       const field=document.querySelector('#session-form').elements.password;
@@ -73,6 +91,7 @@ app.whenReady().then(async () => {
     await w.webContents.executeJavaScript(
       "document.querySelector('#editor-cancel').click()",
     );
+    markStage("SSH/SFTP workspace and terminal sizing");
     await w.webContents.executeJavaScript(`(async()=>{
       document.querySelector('#new').click();
       const f=document.querySelector('#session-form');
@@ -118,15 +137,16 @@ app.whenReady().then(async () => {
       (await w.webContents.capturePage()).toPNG(),
     );
     if (process.env.JAYXTERM_CLIPBOARD_QA === "1")
-      await require("./clipboard-check.cjs").check(w, fixture);
+      await runCheck("clipboard", "./clipboard-check.cjs", w, fixture);
     if (process.env.JAYXTERM_EDITOR_QA === "1")
-      await require("./remote-editor-check.cjs").check(w, fixture);
+      await runCheck("remote editor", "./remote-editor-check.cjs", w, fixture);
     if (process.env.JAYXTERM_LOCAL_DRAG_QA === "1")
-      await require("./local-drag-check.cjs").check(w, fixture);
+      await runCheck("local drag", "./local-drag-check.cjs", w, fixture);
     if (process.env.JAYXTERM_READLINE_QA === "1")
-      await require("./readline-check.cjs").check(w, fixture);
+      await runCheck("readline", "./readline-check.cjs", w, fixture);
     if (process.env.JAYXTERM_VIM_QA === "1")
-      await require("./vim-check.cjs").check(w, fixture);
+      await runCheck("Vim", "./vim-check.cjs", w, fixture);
+    markStage("SSH working-directory sync");
     const inputsBeforeQuery = fixture.inputs.length;
     const queryBytes = () =>
       Buffer.concat(fixture.inputs.slice(inputsBeforeQuery));
@@ -219,6 +239,7 @@ app.whenReady().then(async () => {
       }
       throw new Error('SSH directory sync did not return to the root of the fixture');
     })()`);
+    markStage("native file drop and recursive folder transfers");
     const upload = path.resolve(".codex-cache/qa/drop.txt");
     fs.writeFileSync(upload, "native file drop test");
     await w.webContents.executeJavaScript(
@@ -304,17 +325,23 @@ app.whenReady().then(async () => {
     )
       throw new Error("Downloaded bytes differ");
     if (process.env.JAYXTERM_MULTIWINDOW_QA === "1")
-      await require("./multiwindow-check.cjs").check(w, fixture);
+      await runCheck("multiple windows", "./multiwindow-check.cjs", w, fixture);
     if (process.env.JAYXTERM_WORKSPACE_QA === "1")
-      await require("./workspace-check.cjs").check(w, fixture);
+      await runCheck("split workspace", "./workspace-check.cjs", w, fixture);
     if (process.env.JAYXTERM_SETTINGS_QA === "1")
-      await require("./settings-check.cjs").check(w);
+      await runCheck("settings", "./settings-check.cjs", w);
     if (process.env.JAYXTERM_SETTINGS_QA === "1")
-      await require("./terminal-settings-check.cjs").check(w, fixture);
+      await runCheck("terminal settings", "./terminal-settings-check.cjs", w, fixture);
     if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
-      await require("./session-exchange-check.cjs").check(w);
+      await runCheck("session import/export", "./session-exchange-check.cjs", w);
     if (process.env.JAYXTERM_FEATURES_QA === "1")
-      await require("./features-check.cjs").check(w, fixture);
+      await runCheck(
+        "themes, remote deletion and session duplication",
+        "./features-check.cjs",
+        w,
+        fixture,
+      );
+    markStage("cleanup");
     await w.webContents.executeJavaScript(
       `(()=>{for(const button of document.querySelectorAll('.tab .close'))button.click();})()`,
     );
@@ -325,6 +352,7 @@ app.whenReady().then(async () => {
     clearTimeout(deadline);
     app.exit(0);
   } catch (e) {
+    console.error(`Application smoke test failed during: ${stage}`);
     console.error(e);
     clearTimeout(deadline);
     app.exit(1);

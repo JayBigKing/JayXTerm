@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { once } = require("node:events");
 const { BrowserWindow } = require("electron");
 
 async function check(win, fixture) {
@@ -21,8 +22,17 @@ async function check(win, fixture) {
   const initial = await run("return await api.settings();");
   const source = await run("return $('.tab.active').dataset.connection;");
   const previousEncoding = await run("return $('#terminal-encoding').value;");
+  const restoreWindow = process.platform === "win32" && !win.isMinimized();
   let other, newSession;
   try {
+    // Reproduce Windows CI's background state: font previews and terminal
+    // resizing must still finish when the workspace is minimized.
+    if (restoreWindow) {
+      const minimized = once(win, "minimize");
+      win.minimize();
+      await minimized;
+      console.log("Checking terminal settings with the workspace minimized");
+    }
     await run(`
       window.__initialColumns = columns();
       const otherFont = getComputedStyle($('.sidebar')).fontSize;
@@ -116,6 +126,7 @@ async function check(win, fixture) {
       $('#settings-cancel').click();`);
     console.log("PASS: settings categories, terminal font preview/cancel/save/reset, resizing, cross-window sync and GB2312 SSH input/output");
   } finally {
+    if (restoreWindow && !win.isDestroyed()) win.restore();
     if (other && !other.isDestroyed()) {
       await other.webContents.executeJavaScript("document.querySelector('.tab .close')?.click();");
       other.allowClose = true;
