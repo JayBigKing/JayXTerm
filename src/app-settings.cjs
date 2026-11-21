@@ -2,7 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHmac, randomBytes, randomUUID } = require("node:crypto");
 const { openStore } = require("./store.cjs");
-const { terminalDefaults, terminalEncodings, validFontFamily, validFontSize } = require("./terminal-settings.mjs");
+const { terminalDefaults, terminalEncodings, validFontFamily, validCjkFontFamily, validFontSize } = require("./terminal-settings.mjs");
 
 const cacheFolders = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "ShaderCache"];
 const defaultBackground = "#394351";
@@ -92,6 +92,7 @@ function openAppSettings(file, defaultCache, safeStorage) {
     const { backgroundColor: previousBackground, ...saved } = store.get();
     const data = { ...defaults, ...saved };
     if (!validFontFamily(data.fontFamily)) data.fontFamily = terminalDefaults.fontFamily;
+    if (!validCjkFontFamily(data.cjkFontFamily)) data.cjkFontFamily = terminalDefaults.cjkFontFamily;
     if (!validFontSize(data.fontSize)) data.fontSize = terminalDefaults.fontSize;
     if (!terminalEncodings.includes(data.defaultEncoding)) data.defaultEncoding = terminalDefaults.defaultEncoding;
     if (typeof data.highlightKeywords !== "boolean") data.highlightKeywords = true;
@@ -149,16 +150,17 @@ function openAppSettings(file, defaultCache, safeStorage) {
     },
     describe() {
       const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground,
-        fontFamily, fontSize, defaultEncoding, highlightKeywords } = settings();
+        fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords } = settings();
       return {
         cachePath, pendingCache: pendingCache?.path ?? null, cacheError, saveHistory, fileOpen, defaultCache,
         backgroundColor: validBackground(workspaceBackground) ? workspaceBackground : defaultBackground,
         defaultBackground,
-        fontFamily, fontSize, defaultEncoding, highlightKeywords,
+        fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords,
       };
     },
-    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, fontSize, defaultEncoding, highlightKeywords }) {
+    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords }) {
       if ((fontFamily !== undefined && !validFontFamily(fontFamily)) ||
+          (cjkFontFamily !== undefined && !validCjkFontFamily(cjkFontFamily)) ||
           (fontSize !== undefined && !validFontSize(fontSize)) ||
           (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)) ||
           (highlightKeywords !== undefined && typeof highlightKeywords !== "boolean"))
@@ -177,6 +179,7 @@ function openAppSettings(file, defaultCache, safeStorage) {
       if (!saveHistory) data.passwordHistory = [];
       data.fileOpen = fileOpen;
       if (fontFamily !== undefined) data.fontFamily = fontFamily.trim();
+      if (cjkFontFamily !== undefined) data.cjkFontFamily = cjkFontFamily.trim();
       if (fontSize !== undefined) data.fontSize = fontSize;
       if (defaultEncoding !== undefined) data.defaultEncoding = defaultEncoding;
       if (highlightKeywords !== undefined) data.highlightKeywords = highlightKeywords;

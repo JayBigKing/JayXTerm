@@ -332,6 +332,8 @@ app.whenReady().then(async () => {
       await runCheck("settings", "./settings-check.cjs", w);
     if (process.env.JAYXTERM_SETTINGS_QA === "1")
       await runCheck("terminal settings", "./terminal-settings-check.cjs", w, fixture);
+    if (process.env.JAYXTERM_SETTINGS_QA === "1")
+      await runCheck("local fonts and separate CJK fonts", "./font-picker-check.cjs", w, fixture);
     if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
       await runCheck("session import/export", "./session-exchange-check.cjs", w);
     if (process.env.JAYXTERM_ASSIST_QA === "1") {

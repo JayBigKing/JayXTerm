@@ -64,25 +64,36 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   const { file, open } = setup(t);
   const initial = open().describe();
   assert.equal(initial.fontFamily, "Cascadia Mono");
+  assert.equal(initial.cjkFontFamily, "");
   assert.equal(initial.fontSize, 14);
   assert.equal(initial.defaultEncoding, "utf-8");
   assert.equal(initial.highlightKeywords, true);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
-  open().apply({ ...base, fontFamily: " Consolas ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: false });
+  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: false });
   const reloaded = open();
   assert.equal(reloaded.describe().fontFamily, "Consolas");
+  assert.equal(reloaded.describe().cjkFontFamily, "Microsoft YaHei");
   assert.equal(reloaded.describe().fontSize, 20);
   assert.equal(reloaded.describe().defaultEncoding, "gb2312");
   assert.equal(reloaded.describe().highlightKeywords, false);
   reloaded.apply({ ...base, backgroundColor: "#ffffff" });
   assert.equal(open().describe().fontSize, 20);
+  assert.equal(open().describe().cjkFontFamily, "Microsoft YaHei");
   assert.equal(open().describe().highlightKeywords, false);
   const previous = fs.readFileSync(file, "utf8");
   for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
-    { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" }, { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }]) {
+    { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" },
+    { cjkFontFamily: null }, { cjkFontFamily: "   " }, { cjkFontFamily: 'bad" font' },
+    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }]) {
     assert.throws(() => open().apply({ ...base, ...invalid }), /终端设置/);
     assert.equal(fs.readFileSync(file, "utf8"), previous);
   }
+  reloaded.apply({ ...base, cjkFontFamily: "" });
+  assert.equal(open().describe().cjkFontFamily, "");
+  // Existing installations keep their chosen font and gain automatic CJK fallback.
+  fs.writeFileSync(file, JSON.stringify({ fontFamily: "Consolas", fontSize: 16 }));
+  assert.equal(open().describe().fontFamily, "Consolas");
+  assert.equal(open().describe().cjkFontFamily, "");
   fs.writeFileSync(file, JSON.stringify({ fontSize: -1, fontFamily: null, defaultEncoding: "invalid" }));
   assert.equal(open().describe().fontSize, 14);
   assert.equal(open().describe().fontFamily, "Cascadia Mono");

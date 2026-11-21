@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { applyTheme } from "./theme.mjs";
 import { installSettingsPanel } from "./settings-panel.js";
 import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
+import { prepareTerminalFont } from "./terminal-fonts.js";
 import { installKeywordHighlights } from "./terminal-keywords.mjs";
 import { installTerminalSearch } from "./terminal-search.js";
 import { fileIcon, trashIcon } from "./file-icons.js";
@@ -28,6 +29,7 @@ let localDragAvailable = false;
 let localDragWarmed = false;
 let theme = applyTheme("#394351");
 let fontPreferences = { ...terminalDefaults };
+let fontOptions = terminalFont(fontPreferences);
 let defaultEncoding = terminalDefaults.defaultEncoding;
 let highlightKeywords = true;
 const el = (tag, cls, text) => {
@@ -52,14 +54,22 @@ function renderBackground(color) {
   api.windowTheme(color);
 }
 function renderTerminalFont(settings) {
-  fontPreferences = { fontFamily: settings.fontFamily, fontSize: settings.fontSize };
+  fontPreferences = { fontFamily: settings.fontFamily, cjkFontFamily: settings.cjkFontFamily, fontSize: settings.fontSize };
+  const applied = fontPreferences;
+  const ready = prepareTerminalFont(fontPreferences);
   const options = terminalFont(fontPreferences);
-  for (const tab of tabs.values()) {
-    tab.term.options.fontFamily = options.fontFamily;
-    tab.term.options.fontSize = options.fontSize;
-  }
-  requestAnimationFrame(() => {
-    for (const tab of tabs.values()) fitTerminal(tab);
+  // Measure only after the local CJK face is ready. Otherwise xterm caches
+  // fallback glyph widths and mixed-script lines can retain incorrect spacing.
+  ready.then(() => {
+    if (fontPreferences !== applied) return;
+    fontOptions = options;
+    for (const tab of tabs.values()) {
+      tab.term.options.fontFamily = options.fontFamily;
+      tab.term.options.fontSize = options.fontSize;
+    }
+    requestAnimationFrame(() => {
+      if (fontPreferences === applied) for (const tab of tabs.values()) fitTerminal(tab);
+    });
   });
 }
 const settingsPanel = installSettingsPanel({ api, previewColor: renderBackground,
@@ -473,7 +483,7 @@ function createTerminal(session, id, { moving = false } = {}) {
   const group = focusedGroup || addGroup();
   group.body.append(pane);
   const term = new Terminal({
-    ...terminalFont(fontPreferences),
+    ...fontOptions,
     lineHeight: 1.15,
     scrollback: 3000,
     cursorBlink: false,

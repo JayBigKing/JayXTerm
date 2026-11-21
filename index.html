@@ -174,14 +174,14 @@
             <section id="settings-terminal" role="tabpanel" aria-labelledby="settings-tab-terminal" hidden>
               <h3>终端</h3>
               <div class="settings-font-fields">
-                <label for="settings-font-family">字体<input id="settings-font-family" name="fontFamily" list="terminal-fonts" maxlength="100" required /></label>
-                <datalist id="terminal-fonts"><option value="Cascadia Mono"></option><option value="Consolas"></option><option value="Cascadia Code"></option><option value="Courier New"></option><option value="Lucida Console"></option></datalist>
-                <label for="settings-font-size">字号（px）<input id="settings-font-size" name="fontSize" type="number" min="8" max="48" step="1" required /></label>
+                <div><label for="settings-font-family-picker">西文字体</label><input id="settings-font-family" name="fontFamily" type="hidden" /><button id="settings-font-family-picker" class="font-choice" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="font-picker"><span>Cascadia Mono</span><span aria-hidden="true">▾</span></button></div>
+                <div><label for="settings-cjk-font-family-picker">中文字体</label><input id="settings-cjk-font-family" name="cjkFontFamily" type="hidden" /><button id="settings-cjk-font-family-picker" class="font-choice" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="font-picker"><span>系统默认</span><span aria-hidden="true">▾</span></button></div>
               </div>
-              <p class="form-note">仅用于 Shell 连接窗口，支持 8–48px。可输入本机字体名称，未安装时自动使用等宽字体。</p>
+              <p class="form-note">搜索并选择本机字体。西文建议使用等宽字体；中文可单独选择，两者共用字号。缺少字体或字形时自动回退。</p>
+              <div class="settings-font-size-row"><label for="settings-font-size">字号（px）<input id="settings-font-size" name="fontSize" type="number" min="8" max="48" step="1" required /></label><button id="settings-default-font" type="button">恢复默认字体</button></div>
               <pre id="settings-font-preview" aria-label="终端字体预览">user@server:~$ ls -la
-终端字体预览 0123456789</pre>
-              <button id="settings-default-font" type="button">恢复默认字体</button>
+ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
+              <p class="form-note">仅用于 Shell 连接窗口，支持 8–48px。</p>
               <label for="settings-default-encoding">新会话默认编码</label>
               <select id="settings-default-encoding" name="defaultEncoding"><option value="utf-8">UTF-8</option><option value="gbk">GBK / CP936</option><option value="gb2312">GB2312</option></select>
               <p class="form-note">仅影响新建会话。已有连接可在窗口底栏切换编码，也可在会话配置中更改。</p>
@@ -215,6 +215,12 @@
           <div class="dialog-actions"><button id="settings-cancel" type="button">取消</button><button id="settings-save" class="primary" type="submit">保存设置</button></div>
         </footer>
       </form>
+      <div id="font-picker" popover="auto" role="dialog" aria-labelledby="font-picker-title">
+        <div class="font-picker-heading"><strong id="font-picker-title">选择字体</strong><button id="font-picker-close" type="button" aria-label="关闭字体列表">×</button></div>
+        <input id="font-picker-search" type="search" role="combobox" aria-label="搜索本机字体" aria-autocomplete="list" aria-expanded="true" aria-controls="font-picker-list" placeholder="搜索字体名称…" autocomplete="off" />
+        <div id="font-picker-list" role="listbox" aria-label="本机字体"><div id="font-picker-space" role="presentation"></div></div>
+        <div class="font-picker-footer"><span id="font-picker-status" role="status"></span><button id="font-picker-refresh" type="button">重新读取</button></div>
+      </div>
     </dialog>
     <dialog id="quick-password-editor" aria-labelledby="quick-password-editor-title">
       <form id="quick-password-form">

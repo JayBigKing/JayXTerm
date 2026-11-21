@@ -1,13 +1,16 @@
 import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
+import { installFontPicker } from "./font-picker.js";
 
 // Add sections in the markup and fields here; loading/saving and navigation stay shared.
-const fields = ["backgroundColor", "fontFamily", "fontSize", "defaultEncoding", "highlightKeywords", "fileOpen", "saveHistory"];
+const fields = ["backgroundColor", "fontFamily", "cjkFontFamily", "fontSize", "defaultEncoding", "highlightKeywords", "fileOpen", "saveHistory"];
 export function installSettingsPanel({ api, previewColor, previewFont, previewKeywords, onSave, toast }) {
   const $ = (selector) => document.querySelector(selector);
   const dialog = $("#settings-dialog"), form = $("#settings-form");
+  const fontPicker = installFontPicker(dialog, form);
   let saved, displayed, cacheChoice = "";
   const buttons = [...dialog.querySelectorAll("[data-settings-section]")];
   function selectSection(button) {
+    fontPicker.close();
     for (const item of buttons) {
       const active = item === button;
       item.setAttribute("aria-selected", String(active));
@@ -36,6 +39,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, previewKe
   }
   function preview() {
     const input = readFields();
+    fontPicker.sync();
     $("#settings-background-value").value = input.backgroundColor;
     previewColor(input.backgroundColor);
     previewFont(input);
@@ -45,7 +49,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, previewKe
       fontSize: terminalFont(input).fontSize + "px",
     });
   }
-  for (const name of ["backgroundColor", "fontFamily", "fontSize", "highlightKeywords"])
+  for (const name of ["backgroundColor", "fontFamily", "cjkFontFamily", "fontSize", "highlightKeywords"])
     form.elements[name].oninput = preview;
   function renderCache() {
     const field = $("#settings-cache");
@@ -76,7 +80,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, previewKe
     preview();
   };
   $("#settings-default-font").onclick = () => {
-    for (const name of ["fontFamily", "fontSize"]) form.elements[name].value = terminalDefaults[name];
+    for (const name of ["fontFamily", "cjkFontFamily", "fontSize"]) form.elements[name].value = terminalDefaults[name];
     preview();
   };
   $("#settings-choose-cache").onclick = async () => {
