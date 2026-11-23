@@ -1,9 +1,10 @@
 // Exercises the same pipe protocol as the Windows OLE helper.
 const { createInterface } = require("node:readline");
-const { readFileSync, appendFileSync } = require("node:fs");
+const { readFileSync, appendFileSync, existsSync } = require("node:fs");
 const path = require("node:path");
 
 const log = path.resolve(__dirname, "../.codex-cache/qa/local-drag.jsonl");
+const relayTarget = path.resolve(__dirname, "../.codex-cache/qa/local-drag-relay-target");
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = (line) => console.log(line);
 const decode = (text) => Buffer.from(text, "base64").toString("utf8");
@@ -12,9 +13,10 @@ let length;
 let entries;
 let files;
 let index;
+let relayText;
 
 function finish(status) {
-  appendFileSync(log, JSON.stringify({ entries, files, status }) + "\n");
+  appendFileSync(log, JSON.stringify({ entries, files, status, relayText }) + "\n");
   send(`done\t${token}\t${status}`);
 }
 
@@ -32,7 +34,12 @@ lines.on("line", (line) => {
     files = [];
     length = 0;
     index = -1;
-    send("manifest\t" + token);
+    relayText = size ? decode(size) : "";
+    if (existsSync(relayTarget)) {
+      // Chromium consumes only the text token for an internal drop. Delay done
+      // so the renderer's relay request can arrive while the source is locked.
+      setTimeout(() => finish(relayText === "jayxterm-sftp:" + token ? "copy" : "failed"), 100);
+    } else send("manifest\t" + token);
   } else if (action === "entries") {
     length = Number(value);
   } else if (action === "path") {

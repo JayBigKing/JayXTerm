@@ -22,6 +22,7 @@ jobs:
         shell: pwsh
         env:
           JAYXTERM_LOCAL_DRAG_QA: '1'
+          JAYXTERM_WORKSPACE_QA: '1'
           JAYXTERM_SESSION_EXCHANGE_QA: '1'
           JAYXTERM_SETTINGS_QA: '1'
           JAYXTERM_FEATURES_QA: '1'

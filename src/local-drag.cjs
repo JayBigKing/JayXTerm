@@ -18,20 +18,27 @@ async function prune(root) {
   }
 }
 
-function installLocalDrag({ ipcMain, helper, tempRoot, ensureOwner, ready, request, busyTransfers }) {
+function installLocalDrag({ ipcMain, helper, tempRoot, ensureOwner, ready, request, busyTransfers, remoteDrags }) {
   let child;
   let operation;
   const notify = (job, message) => {
     if (!job.sender.isDestroyed())
-      job.sender.send("window:event", { type: "local-drag-status", id: job.id, message });
+      job.sender.send("window:event", {
+        type: "local-drag-status", id: job.id, message, active: operation?.id === job.id,
+      });
   };
   function finish(job, status) {
     if (operation !== job) return;
     operation = null;
     busyTransfers.delete(job.id);
-    notify(job, job.error || (status === "copy" ? "本地拖放完成" :
+    if (job.error) status = "failed";
+    if (job.relay && status !== "copy") remoteDrags.delete(job.token);
+    // A renderer drop can arrive before the helper's done message. Release the
+    // source transfer lock before allowing the internal relay to start.
+    job.resolveDrop?.(status);
+    notify(job, job.relay?.claimed ? undefined : job.error || (status === "copy" ? "本地拖放完成" :
       status === "cancelled" ? "已取消本地拖放" :
-      status === "rejected" ? "目标没有接受拖放，请松手放在资源管理器的文件列表内" :
+      status === "rejected" ? "目标没有接受拖放，请放到 Windows 桌面、文件夹或 SSH 文件列表内" :
       status === "released" ? "本地拖放未启动，拖动时请保持按住左键" :
       "本地拖放失败，请查看远端文件状态或使用下载按钮"));
     if (!job.answering) discard(job.folder);
@@ -107,7 +114,7 @@ function installLocalDrag({ ipcMain, helper, tempRoot, ensureOwner, ready, reque
 
   ipcMain.handle("local-drag:available", () => Boolean(helper));
   ipcMain.on("local-drag:warm", warm);
-  ipcMain.on("local-drag:start", (event, { id, path: remote } = {}) => {
+  ipcMain.on("local-drag:start", (event, { id, path: remote, token } = {}) => {
     if (!helper) return;
     const job = { id, remote, sender: event.sender };
     try {
@@ -117,16 +124,31 @@ function installLocalDrag({ ipcMain, helper, tempRoot, ensureOwner, ready, reque
       if (typeof remote !== "string" || !path.posix.isAbsolute(remote) ||
         remote.includes("\0") || remote.endsWith("/") || path.posix.normalize(remote) !== remote)
         throw new Error("无效的远程文件路径");
-      safeName(path.posix.basename(remote));
+      // SSH-to-SSH copies allow POSIX names such as "report:latest". Validate
+      // Windows names only when the Shell actually requests the manifest.
+      if (token === undefined) safeName(path.posix.basename(remote));
+      if (token !== undefined) {
+        const relay = remoteDrags?.get(token);
+        if (!relay || relay.id !== id || relay.remote !== remote ||
+            relay.owner !== job.sender.id || relay.expires <= Date.now() || relay.nativeDrop)
+          throw new Error("拖放已失效，请重新拖动文件");
+        job.relay = relay;
+        relay.nativeDrop = new Promise((resolve) => { job.resolveDrop = resolve; });
+      }
+      job.token = token ?? randomUUID();
       warm();
-      job.token = randomUUID();
       job.staged = new Map();
       operation = job;
       busyTransfers.add(id);
-      notify(job, "拖到资源管理器后松开");
-      child.stdin.write("drag\t" + job.token + "\n");
+      notify(job, job.relay ? "拖到 Windows 桌面、文件夹或其他 SSH 面板后松开" : "拖到 Windows 桌面或文件夹后松开");
+      child.stdin.write("drag\t" + job.token +
+        (job.relay ? "\t" + encode("jayxterm-sftp:" + job.token) : "") + "\n");
     } catch (error) {
       if (operation === job) finish(job, "failed");
+      else if (job.relay) {
+        remoteDrags.delete(job.token);
+        job.resolveDrop("failed");
+      }
       notify(job, error.message);
     }
   });

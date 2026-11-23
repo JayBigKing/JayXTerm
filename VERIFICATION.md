@@ -1,5 +1,16 @@
 # 初版验证记录
 
+## 2026-11-23：远程文件名和整行拖到 Windows 桌面
+
+- macOS arm64，Node.js 26.0.0，Electron 42.8.1 / Chromium 148.0.7778.280。修复前在实际 Electron 窗口加入文件名起拖检查，原有「↗」用例通过，新用例失败：拖动只提供 `application/x-jayxterm-sftp` 和 `text/plain`，没有启动原生文件拖放。
+- 修复后文件名及整行接入 Windows 辅助组件，并携带一次性 SSH 互传令牌。核对当前 Chromium 版本的拖放实现，使用其渲染器来源和忽略合成文件内容的标记，让 SSH 面板接收令牌，不先将远程文件下载到本机。枚举格式不扫描远程目录；内部复制等待原生拖动释放源连接后开始。
+- `npm test` 的 33 项测试通过，新增检查覆盖等待与释放传输锁、取消、目标拒绝、提前松手、辅助进程退出、令牌归属及失效校验、仅适用于 POSIX 的文件名。Vite 生产构建通过。
+- 设置 `JAYXTERM_LOCAL_DRAG_QA=1 JAYXTERM_WORKSPACE_QA=1 JAYXTERM_MULTIWINDOW_QA=1` 后运行 `electron scripts/smoke.cjs`：实际 Electron 鼠标事件验证从文件名起拖，通过真实本地 SSH/SFTP 核对二进制文件字节、中文路径、嵌套及空目录、取消和暂存清理。模拟原生接收端延迟结束拖动，跨窗口文件及分屏目录互传通过，包含空格、中文和冒号的 POSIX 文件名保持可用。单独设置 `JAYXTERM_WORKSPACE_QA=1` 验证无原生组件时的浏览器拖拽回退通过。
+- 扩展冒烟抓到下载完成后旧进度消息覆盖完成状态的问题。新增确定性检查，向已完成的普通下载和原生拖放注入迟到的进度消息；修复前原生拖放检查失败，修复后两个完成状态均保持。原生拖动结束时也会清除源窗口的活动状态，不覆盖内部互传的进度。
+- 在远端最新 main 上，启用与 Windows CI 相同的拖放、分屏、会话迁移、设置、终端辅助和功能检查，完整 macOS Electron 冒烟约 15.2 秒通过。其间修正字体检查对 macOS 本地化名称的误判：同时用所选字体的 PostScript 名称校验实际字形，覆盖 `PingFang SC` 与「蘋方-簡」的名称差异。
+- 使用 Zig 0.14.1 在 macOS 交叉编译 Windows x64 辅助程序成功，产物为 PE32+ x86-64。扩展 `--self-test` 检查令牌、Chromium 标记及无需读取远端的格式枚举；此原生测试由 Windows CI 执行。CI 也已加入分屏及跨窗口文件互传检查。
+- 上述 macOS 界面检查使用模拟 Windows 接收端，不能替代 Windows OLE / Explorer 验收。后续 Windows 构建后需运行 `node scripts/native-drag-check.cjs`，并实测从文件名、整行和「↗」拖到桌面及资源管理器，以及取消后重试和拖回 SSH 面板；核对文件内容、目录结构与状态提示。
+
 ## 2026-11-21：本机字体选择与中西文字体分开设置
 
 - Windows 本机 Node.js 24.16、Electron 42.8.1：24 项单元及 SSH 集成测试通过，Vite 生产构建通过。设置持久化检查覆盖旧配置迁移、中文字体保存与清除、无效值拒绝及修改其他设置时保留字体。

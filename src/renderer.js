@@ -878,7 +878,7 @@ api.onEvent((m) => {
     if (current === t.id)
       $("#status").textContent =
         `${t.session.username}@${t.session.host} · ${t.state}`;
-  } else if (m.type === "progress") {
+  } else if (m.type === "progress" && (t.transferring || t.localDragging)) {
     const text = `${m.files || 0} 个文件完成 · ${m.name?.split("/").pop() || ""} ${m.total ? Math.round((m.current / m.total) * 100) : 0}%`;
     showTransfer(t, text);
   }
@@ -897,6 +897,11 @@ function renderSidebarFiles(tab) {
   renderFiles(tab, $("#file-list"));
   $("#transfer-status").textContent = tab.transferStatus ||
     (fileOpen === "single" ? "拖入上传 · 单击文件编辑" : "拖入上传 · 双击文件编辑");
+}
+function warmLocalDrag() {
+  if (!localDragAvailable || localDragWarmed) return;
+  localDragWarmed = true;
+  api.warmLocalDrag();
 }
 function renderFiles(t, list) {
   highlightDropTarget(null);
@@ -921,16 +926,19 @@ function renderFiles(t, list) {
     let localGesture = false;
     if (!f.symlink) {
       row.draggable = true;
+      row.onpointerenter = warmLocalDrag;
       row.onpointerdown = () => { localGesture = false; };
       row.ondragstart = (event) => {
         if (localGesture) event.preventDefault();
-        else startRemoteDrag(event, t.id, remoteJoin(t.path, f.name));
+        else localGesture = startRemoteDrag(event, t.id, remoteJoin(t.path, f.name)) === true;
       };
     }
     const gesture = fileOpen === "single" && !f.symlink ? "单击" : "双击";
     row.title = f.directory
       ? gesture + "进入目录；右侧 ↓ 下载整个目录"
       : f.symlink ? "双击下载文件" : gesture + "编辑；右侧 ↓ 下载文件";
+    if (localDragAvailable && !f.symlink)
+      row.title += "；拖动可复制到 Windows 桌面、文件夹或其他 SSH 面板";
     if (f.directory) row.dataset.directory = remoteJoin(t.path, f.name);
     row.append(
       fileIcon(f),
@@ -959,14 +967,10 @@ function renderFiles(t, list) {
       const grip = el("button", "local-drag", "↗");
       grip.type = "button";
       grip.tabIndex = -1;
-      grip.title = "拖到 Windows 文件夹";
+      grip.title = "拖到 Windows 桌面或文件夹";
       grip.setAttribute("aria-label", grip.title);
       grip.onclick = (event) => event.stopPropagation();
-      grip.onpointerenter = () => {
-        if (localDragWarmed) return;
-        localDragWarmed = true;
-        api.warmLocalDrag();
-      };
+      grip.onpointerenter = warmLocalDrag;
       let press;
       grip.onpointerdown = (event) => {
         if (event.button !== 0 || !event.isPrimary) return;
@@ -997,13 +1001,14 @@ function renderFiles(t, list) {
       else openRemoteEditor(t, f);
     };
     row.onclick = (event) => {
+      if (localGesture) return;
       t.selected = f;
       list.querySelector(".file-row.selected")?.classList.remove("selected");
       row.classList.add("selected");
       if (fileOpen === "single" && !f.symlink && event.detail <= 1) open();
     };
     row.ondblclick = (event) => {
-      if (!event.target.closest("button") && (fileOpen === "double" || f.symlink)) open();
+      if (!localGesture && !event.target.closest("button") && (fileOpen === "double" || f.symlink)) open();
     };
     row.onkeydown = (e) => {
       if (e.key === "Enter" && e.target === row) {
@@ -1123,6 +1128,8 @@ function startRemoteDrag(event, id, path) {
   if (
     !tab ||
     tab.moving ||
+    tab.loading ||
+    tab.removing ||
     tab.transferring ||
     tab.state !== "已连接" ||
     event.target.closest("button")
@@ -1138,6 +1145,13 @@ function startRemoteDrag(event, id, path) {
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData(remoteDragType, token);
   event.dataTransfer.setData("text/plain", remoteTokenPrefix + token);
+  if (localDragAvailable) {
+    // Cancel Chromium's text-only drag before the helper takes over. The native
+    // data object carries this same token for drops back into an SSH panel.
+    event.preventDefault();
+    api.startLocalDrag({ id, path, token });
+    return true;
+  }
 }
 for (const type of ["dragover", "drop"])
   document.addEventListener(type, (event) => event.preventDefault());
@@ -1428,7 +1442,10 @@ api.onWindow(async (m) => {
   }
   if (m.type === "local-drag-status") {
     const tab = tabs.get(m.id);
-    if (tab) showTransfer(tab, m.message);
+    if (tab) {
+      tab.localDragging = m.active;
+      if (m.message) showTransfer(tab, m.message);
+    }
     return;
   }
   if (m.type === "settings-changed") {
