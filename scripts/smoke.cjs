@@ -346,6 +346,7 @@ app.whenReady().then(async () => {
     if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
       await runCheck("session import/export", "./session-exchange-check.cjs", w);
     if (process.env.JAYXTERM_ASSIST_QA === "1") {
+      await runCheck("conservative local echo with delayed SSH", "./terminal-echo-check.cjs", w, fixture);
       await runCheck("keyword highlights, terminal search and file icons", "./terminal-assistance-check.cjs", w, fixture);
       await runCheck("quick password vault and prompt suggestions", "./quick-passwords-check.cjs", w, fixture);
     }

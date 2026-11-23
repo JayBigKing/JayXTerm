@@ -495,7 +495,22 @@ void drag(const std::string &token, const std::wstring &relayText) {
   auto *object = new DragObject(state);
   auto *source = new DropSource(state);
   DWORD effect = DROPEFFECT_NONE;
+  // The helper has no window of its own. OLE's drag loop otherwise waits on
+  // an input queue that never receives the renderer's mouse-up/Escape events.
+  // Join the foreground source queue only for the synchronous gesture, then
+  // detach before servicing the Shell's asynchronous file reads.
+  const DWORD ownThread = GetCurrentThreadId();
+  const DWORD sourceThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+  const bool attached = sourceThread && sourceThread != ownThread &&
+    AttachThreadInput(ownThread, sourceThread, TRUE);
+  if (!sourceThread || (sourceThread != ownThread && !attached)) {
+    object->Release();
+    source->Release();
+    std::cout << "done\t" << token << "\tfailed" << std::endl;
+    return;
+  }
   const HRESULT result = SHDoDragDrop(nullptr, object, source, DROPEFFECT_COPY, &effect);
+  if (attached) AttachThreadInput(ownThread, sourceThread, FALSE);
   if (result == DRAGDROP_S_DROP) pumpUntilFinished(object, *state);
   effect = object->reportedEffect(effect);
   object->Release();

@@ -4,6 +4,7 @@ export const terminalDefaults = {
   fontSize: 14,
   defaultEncoding: "utf-8",
   highlightKeywords: true,
+  predictiveEcho: true,
 };
 export const terminalEncodings = ["utf-8", "gbk", "gb2312"];
 export const validFontFamily = (value) => typeof value === "string" && value.trim().length > 0 &&

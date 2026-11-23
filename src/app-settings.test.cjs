@@ -68,8 +68,9 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(initial.fontSize, 14);
   assert.equal(initial.defaultEncoding, "utf-8");
   assert.equal(initial.highlightKeywords, true);
+  assert.equal(initial.predictiveEcho, true);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
-  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: false });
+  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: false, predictiveEcho: false });
   const reloaded = open();
   assert.equal(reloaded.describe().fontFamily, "Consolas");
   assert.equal(reloaded.describe().cjkFontFamily, "Microsoft YaHei");
@@ -80,11 +81,12 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(open().describe().fontSize, 20);
   assert.equal(open().describe().cjkFontFamily, "Microsoft YaHei");
   assert.equal(open().describe().highlightKeywords, false);
+  assert.equal(open().describe().predictiveEcho, false);
   const previous = fs.readFileSync(file, "utf8");
   for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
     { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" },
     { cjkFontFamily: null }, { cjkFontFamily: "   " }, { cjkFontFamily: 'bad" font' },
-    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }]) {
+    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { predictiveEcho: "yes" }]) {
     assert.throws(() => open().apply({ ...base, ...invalid }), /终端设置/);
     assert.equal(fs.readFileSync(file, "utf8"), previous);
   }

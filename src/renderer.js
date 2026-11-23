@@ -8,6 +8,7 @@ import { installKeywordHighlights } from "./terminal-keywords.mjs";
 import { installTerminalSearch } from "./terminal-search.js";
 import { fileIcon, trashIcon } from "./file-icons.js";
 import { installQuickPasswords } from "./quick-passwords.js";
+import { installTerminalEcho } from "./terminal-echo.mjs";
 import "./style.css";
 const $ = (s) => document.querySelector(s);
 const api = window.api;
@@ -32,6 +33,7 @@ let fontPreferences = { ...terminalDefaults };
 let fontOptions = terminalFont(fontPreferences);
 let defaultEncoding = terminalDefaults.defaultEncoding;
 let highlightKeywords = true;
+let predictiveEcho = true;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -88,6 +90,8 @@ function updateSettings(settings) {
   renderBackground(settings.backgroundColor);
   renderTerminalFont(settings);
   renderKeywordHighlights(settings.highlightKeywords);
+  predictiveEcho = settings.predictiveEcho;
+  for (const tab of tabs.values()) tab.echo.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
   fileOpen = settings.fileOpen;
@@ -510,6 +514,7 @@ function createTerminal(session, id, { moving = false } = {}) {
   };
   tab.highlights = installKeywordHighlights(term, theme, highlightKeywords);
   tab.passwordPrompt = quickPasswords.watch(tab);
+  tab.echo = installTerminalEcho(tab, predictiveEcho);
   term.parser.registerOscHandler(7, (value) => {
     const match = /^file:\/\/([^/]*)(\/[^\x00-\x1f]*)$/.exec(value);
     if (!match) return true;
@@ -556,6 +561,7 @@ function createTerminal(session, id, { moving = false } = {}) {
   };
   term.onData((data) => {
     quickPasswords.userInput(tab);
+    tab.echo.input(data);
     if (!tab.moving) api.send({ type: "input", id, data });
   });
   term.onResize(
@@ -818,6 +824,7 @@ function closeTab(id, disconnect = true) {
   terminalSearch.remove(t);
   t.highlights.dispose();
   t.passwordPrompt.dispose();
+  t.echo.dispose();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
@@ -860,9 +867,11 @@ api.onEvent((m) => {
   if (!t) return;
   if (m.type === "data") {
     const bytes = Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0));
-    t.term.write(bytes, () =>
-      api.send({ type: "ack", id: m.id, bytes: m.bytes }),
-    );
+    const rendered = t.echo.output(bytes);
+    t.term.write(bytes, () => {
+      rendered();
+      api.send({ type: "ack", id: m.id, bytes: m.bytes });
+    });
   } else if (m.type === "ready") {
     t.state = "已连接";
     fitTerminal(t);
@@ -870,6 +879,7 @@ api.onEvent((m) => {
     if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
     if (current === t.id) activate(t.id);
   } else if (m.type === "closed" || m.type === "error") {
+    t.echo.reset();
     clearCwdQuery(t);
     t.state = m.type === "closed" ? "已断开" : "连接出错";
     quickPasswords.activate();
@@ -1427,6 +1437,7 @@ function toggleFileWorkspace(focus = true) {
 }
 $("#file-workspace-toggle").onclick = () => toggleFileWorkspace();
 function markMoving(t, moving) {
+  t.echo.reset();
   t.moving = moving;
   t.term.options.disableStdin = moving;
   t.pane.classList.toggle("moving", moving);
