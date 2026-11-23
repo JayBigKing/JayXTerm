@@ -87,6 +87,14 @@
           </aside>
         </aside>
         <main>
+          <form id="terminal-search" class="terminal-search" role="search" aria-label="搜索当前终端" hidden>
+            <input id="terminal-search-input" type="search" placeholder="搜索当前终端及历史输出" aria-label="终端搜索内容" autocomplete="off" maxlength="1000" />
+            <button id="terminal-search-case" type="button" aria-label="区分大小写" title="区分大小写" aria-pressed="false">Aa</button>
+            <output id="terminal-search-count" aria-live="polite">0 / 0</output>
+            <button id="terminal-search-previous" type="button" aria-label="上一个匹配" title="上一个（Shift+Enter）">↑</button>
+            <button id="terminal-search-next" type="button" aria-label="下一个匹配" title="下一个（Enter）">↓</button>
+            <button id="terminal-search-close" type="button" aria-label="关闭终端搜索" title="关闭（Esc）">×</button>
+          </form>
           <div id="welcome" class="welcome">
             <div class="welcome-inner">
               <div class="eyebrow">YOUR SERVERS. ONE WORKSPACE.</div>
@@ -105,9 +113,12 @@
       <footer class="statusbar">
           <span id="status">就绪</span
           ><span
-            ><select id="terminal-encoding" aria-label="当前终端编码" disabled>
+            ><button id="terminal-passwords" type="button" aria-expanded="false" aria-controls="quick-password-picker" title="选择快捷密码填入当前终端并提交" disabled>密码本</button>
+            <button id="terminal-search-toggle" type="button" aria-expanded="false" aria-controls="terminal-search" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>搜索</button>
+            <select id="terminal-encoding" aria-label="当前终端编码" disabled>
               <option value="utf-8">UTF-8</option>
-              <option value="gbk">GBK / CP936</option></select
+              <option value="gbk">GBK / CP936</option>
+              <option value="gb2312">GB2312</option></select
             ><i>·</i> xterm-256color
             <button id="help-menu" popovertarget="help-options">帮助 ▾</button>
             <span
@@ -139,41 +150,96 @@
         </footer>
       </form>
     </dialog>
-    <dialog id="settings-dialog">
+    <dialog id="settings-dialog" aria-labelledby="settings-title">
       <form id="settings-form">
-        <div class="dialog-heading"><h2>设置</h2></div>
-        <label for="settings-cache">缓存位置</label>
-        <div class="settings-cache-row">
-          <input id="settings-cache" readonly />
-          <button id="settings-choose-cache" type="button">选择…</button>
-          <button id="settings-default-cache" type="button">用默认位置</button>
+        <header class="settings-heading"><h2 id="settings-title">设置</h2><p>配置你的工作空间与终端。</p></header>
+        <div class="settings-layout">
+          <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
+            <button type="button" id="settings-tab-appearance" data-settings-section="appearance" role="tab" aria-controls="settings-appearance" aria-selected="true">外观</button>
+            <button type="button" id="settings-tab-terminal" data-settings-section="terminal" role="tab" aria-controls="settings-terminal" aria-selected="false" tabindex="-1">终端</button>
+            <button type="button" id="settings-tab-files" data-settings-section="files" role="tab" aria-controls="settings-files" aria-selected="false" tabindex="-1">文件与存储</button>
+            <button type="button" id="settings-tab-passwords" data-settings-section="passwords" role="tab" aria-controls="settings-passwords" aria-selected="false" tabindex="-1">密码</button>
+          </nav>
+          <div class="settings-content">
+            <section id="settings-appearance" role="tabpanel" aria-labelledby="settings-tab-appearance">
+              <h3>外观</h3>
+              <label for="settings-background">整体界面颜色</label>
+              <div class="settings-color-row">
+                <input id="settings-background" name="backgroundColor" type="color" value="#394351" />
+                <output id="settings-background-value" for="settings-background">#394351</output>
+                <button id="settings-default-background" type="button">恢复默认颜色</button>
+              </div>
+              <p class="form-note">应用于标题栏、侧栏、工具栏、终端与远程编辑器，文字颜色自动适配。保存后同步所有窗口。</p>
+            </section>
+            <section id="settings-terminal" role="tabpanel" aria-labelledby="settings-tab-terminal" hidden>
+              <h3>终端</h3>
+              <div class="settings-font-fields">
+                <div><label for="settings-font-family-picker">西文字体</label><input id="settings-font-family" name="fontFamily" type="hidden" /><button id="settings-font-family-picker" class="font-choice" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="font-picker"><span>Cascadia Mono</span><span aria-hidden="true">▾</span></button></div>
+                <div><label for="settings-cjk-font-family-picker">中文字体</label><input id="settings-cjk-font-family" name="cjkFontFamily" type="hidden" /><button id="settings-cjk-font-family-picker" class="font-choice" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="font-picker"><span>系统默认</span><span aria-hidden="true">▾</span></button></div>
+              </div>
+              <p class="form-note">搜索并选择本机字体。西文建议使用等宽字体；中文可单独选择，两者共用字号。缺少字体或字形时自动回退。</p>
+              <div class="settings-font-size-row"><label for="settings-font-size">字号（px）<input id="settings-font-size" name="fontSize" type="number" min="8" max="48" step="1" required /></label><button id="settings-default-font" type="button">恢复默认字体</button></div>
+              <pre id="settings-font-preview" aria-label="终端字体预览">user@server:~$ ls -la
+ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
+              <p class="form-note">仅用于 Shell 连接窗口，支持 8–48px。</p>
+              <label for="settings-default-encoding">新会话默认编码</label>
+              <select id="settings-default-encoding" name="defaultEncoding"><option value="utf-8">UTF-8</option><option value="gbk">GBK / CP936</option><option value="gb2312">GB2312</option></select>
+              <p class="form-note">仅影响新建会话。已有连接可在窗口底栏切换编码，也可在会话配置中更改。</p>
+              <label class="check"><input id="settings-highlight-keywords" name="highlightKeywords" type="checkbox" checked />高亮日志关键词</label>
+              <p class="form-note keyword-legend"><span class="success">Success / Passed</span><span class="error">Fail / Error</span><span class="warning">Warning / Timeout</span><span class="keyword-info">Info / Debug</span></p>
+              <p class="form-note">匹配不区分大小写，支持中文成功、失败、错误、警告和超时；保留原始输出。Vim 等全屏程序使用自身配色。</p>
+            </section>
+            <section id="settings-files" role="tabpanel" aria-labelledby="settings-tab-files" hidden>
+              <h3>文件与存储</h3>
+              <label>文件和目录打开方式<select name="fileOpen"><option value="double">双击打开</option><option value="single">单击打开</option></select></label>
+              <p class="form-note">适用于侧栏远程文件和文件空间。目录进入，文本文件打开编辑器。</p>
+              <label for="settings-cache">缓存位置</label>
+              <div class="settings-cache-row"><input id="settings-cache" readonly /><button id="settings-choose-cache" type="button">选择…</button><button id="settings-default-cache" type="button">用默认位置</button></div>
+              <p class="form-note" id="settings-cache-note">位置变更在下次启动时生效。</p>
+            </section>
+            <section id="settings-passwords" role="tabpanel" aria-labelledby="settings-tab-passwords" hidden>
+              <h3>密码</h3>
+              <div class="vault-heading"><strong>快捷密码本</strong><button id="vault-add" type="button">＋ 新增密码</button></div>
+              <p class="form-note">为密码添加描述，例如「虚拟机1」。使用此电脑的系统安全存储加密，密码修改即时保存。</p>
+              <div id="vault-list" class="vault-list" aria-label="已保存的快捷密码"></div>
+              <p id="vault-note" class="form-note" role="status"></p>
+              <p class="form-note">连接密码框可选择描述填入。检测到 Shell 密码提示时，在光标旁显示候选；↑/↓ 选择，Enter 或点选后填入并提交，Esc 关闭。</p>
+              <hr class="settings-divider" />
+              <label class="check"><input name="saveHistory" type="checkbox" />加密保存历史密码</label>
+              <p class="form-note">默认关闭。关闭并保存设置会清空自动记录的历史密码。快捷密码本和各会话保存的密码独立管理。</p>
+            </section>
+          </div>
         </div>
-        <p class="form-note" id="settings-cache-note">位置变更在下次启动时生效。</p>
-        <label class="check">
-          <input name="saveHistory" type="checkbox" />加密保存历史密码
-        </label>
-        <p class="form-note">默认关闭。关闭并保存设置会清空历史密码本。各会话保存的密码独立管理。</p>
-        <label for="settings-background">页面背景颜色</label>
-        <div class="settings-color-row">
-          <input id="settings-background" name="backgroundColor" type="color" value="#394351" />
-          <output id="settings-background-value" for="settings-background">#394351</output>
-          <button id="settings-default-background" type="button">恢复默认颜色</button>
-        </div>
-        <p class="form-note">应用于侧栏、欢迎页和分屏之间。</p>
-        <label>文件和目录打开方式
-          <select name="fileOpen">
-            <option value="double">双击打开</option>
-            <option value="single">单击打开</option>
-          </select>
-        </label>
-        <p class="form-note">适用于侧栏远程文件和文件空间。目录进入，文本文件打开编辑器。</p>
-        <p id="settings-error" class="error" role="status"></p>
-        <div class="dialog-actions">
-          <button id="settings-cancel" type="button">取消</button>
-          <button id="settings-save" class="primary" type="submit">保存设置</button>
-        </div>
+        <footer class="settings-footer">
+          <p id="settings-error" class="error" role="status"></p>
+          <div class="dialog-actions"><button id="settings-cancel" type="button">取消</button><button id="settings-save" class="primary" type="submit">保存设置</button></div>
+        </footer>
+      </form>
+      <div id="font-picker" popover="auto" role="dialog" aria-labelledby="font-picker-title">
+        <div class="font-picker-heading"><strong id="font-picker-title">选择字体</strong><button id="font-picker-close" type="button" aria-label="关闭字体列表">×</button></div>
+        <input id="font-picker-search" type="search" role="combobox" aria-label="搜索本机字体" aria-autocomplete="list" aria-expanded="true" aria-controls="font-picker-list" placeholder="搜索字体名称…" autocomplete="off" />
+        <div id="font-picker-list" role="listbox" aria-label="本机字体"><div id="font-picker-space" role="presentation"></div></div>
+        <div class="font-picker-footer"><span id="font-picker-status" role="status"></span><button id="font-picker-refresh" type="button">重新读取</button></div>
+      </div>
+    </dialog>
+    <dialog id="quick-password-editor" aria-labelledby="quick-password-editor-title">
+      <form id="quick-password-form">
+        <h2 id="quick-password-editor-title">新增快捷密码</h2>
+        <input name="id" type="hidden" />
+        <label>描述<input id="quick-password-description" name="description" placeholder="例如：虚拟机1" maxlength="80" required autocomplete="off" /></label>
+        <label>密码<div class="password-field"><input id="quick-password-secret" name="password" type="password" maxlength="4096" autocomplete="new-password" required /><button id="quick-password-reveal" type="button" aria-pressed="false">显示</button></div></label>
+        <p id="quick-password-editor-note" class="form-note">保存后可以按描述选择并填入。</p>
+        <p id="quick-password-error" class="error" role="alert"></p>
+        <div class="dialog-actions"><button id="quick-password-cancel" type="button">取消</button><button id="quick-password-save" type="submit" class="primary">保存密码</button></div>
       </form>
     </dialog>
+    <div id="quick-password-picker" class="password-picker" popover="manual" role="dialog" aria-label="选择快捷密码">
+      <div class="password-picker-heading"><strong>选择快捷密码</strong><button id="quick-password-picker-close" type="button" aria-label="关闭密码列表">×</button></div>
+      <p id="quick-password-target" class="form-note"></p>
+      <input id="quick-password-filter" placeholder="筛选密码描述" aria-label="筛选密码描述" autocomplete="off" />
+      <div id="quick-password-options" role="listbox" aria-label="密码描述"></div>
+      <button id="quick-password-manage" type="button">管理快捷密码…</button>
+    </div>
     <dialog id="editor">
       <form id="session-form">
         <div class="dialog-heading">
@@ -225,6 +291,7 @@
             /><button type="button" id="toggle-password" aria-pressed="false">
               显示
             </button>
+            <button type="button" id="session-quick-password" class="password-book-button" title="选择快捷密码">密码本</button>
           </div></label
         ><label
           >历史密码<select id="session-password-history" aria-label="历史密码" disabled>
@@ -234,6 +301,7 @@
           >终端编码<select name="encoding">
             <option value="utf-8">UTF-8（新系统）</option>
             <option value="gbk">GBK / CP936（旧系统）</option>
+            <option value="gb2312">GB2312</option>
           </select></label
         ><label class="check"
           ><input
@@ -262,6 +330,7 @@
         <div class="password-field">
           <input id="connect-password" type="password" placeholder="输入连接密码" required autocomplete="off" />
           <button type="button" id="toggle-connect-password" aria-pressed="false">显示</button>
+          <button type="button" id="connect-quick-password" class="password-book-button" title="选择快捷密码">密码本</button>
         </div>
         <label>历史密码<select id="connect-password-history" aria-label="历史密码" disabled>
           <option value="">无密码记录</option>

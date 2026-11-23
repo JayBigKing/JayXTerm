@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
     "iconv-lite": "^0.7.3",
@@ -48,6 +49,9 @@
       "src/store.cjs",
       "src/session-exchange.cjs",
       "src/app-settings.cjs",
+      "src/password-vault.cjs",
+      "src/theme.mjs",
+      "src/terminal-settings.mjs",
       "src/local-drag.cjs",
       "src/transfers.cjs",
       ".codex-cache/build/renderer/**/*",

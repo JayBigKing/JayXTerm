@@ -1,5 +1,6 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { createHash } = require("node:crypto");
 const call = (s, method, ...args) =>
   new Promise((resolve, reject) =>
     s[method](...args, (err, value) => (err ? reject(err) : resolve(value))),
@@ -15,6 +16,71 @@ function safeName(name) {
   )
     throw new Error("无法安全保存此文件名：" + name);
   return name;
+}
+function validateRemoteRemoval(remote) {
+  if (typeof remote !== "string" || !remote.startsWith("/") || remote === "/" ||
+      remote.includes("\0") || remote.endsWith("/") || path.posix.normalize(remote) !== remote)
+    throw new Error("无效的远程删除路径，不能删除根目录");
+}
+async function removalEntry(sftp, remote) {
+  const parent = path.posix.dirname(remote);
+  if (await call(sftp, "realpath", parent) !== parent)
+    throw new Error("远程父目录已变化，请刷新后重新删除：" + parent);
+  const stat = await call(sftp, "lstat", remote);
+  const link = stat.isSymbolicLink();
+  const directory = stat.isDirectory() && !link;
+  if (directory && await call(sftp, "realpath", remote) !== remote)
+    throw new Error("远程目录包含符号链接，请从真实路径删除：" + remote);
+  // atime can change during preview, so it is excluded from the comparison.
+  const attributes = [stat.mode, stat.uid, stat.gid, stat.size, stat.mtime];
+  return { remote, directory, fingerprint: JSON.stringify([link, directory, attributes]) };
+}
+async function removalPlan(sftp, remote) {
+  validateRemoteRemoval(remote);
+  const hash = createHash("sha256");
+  let count = 0;
+  async function visit(target, depth) {
+    if (depth > 100 || ++count > 10000)
+      throw new Error("待删除目录过大或层级过深，请分批删除");
+    const entry = await removalEntry(sftp, target);
+    hash.update(JSON.stringify([entry.remote, entry.fingerprint]) + "\n");
+    entry.children = [];
+    if (!entry.directory) return entry;
+    const names = (await call(sftp, "readdir", target))
+      .map((item) => item.filename).filter((name) => name !== "." && name !== "..").sort();
+    for (const name of names) {
+      if (!name || /[\/\0]/.test(name)) throw new Error("无效的远程文件名");
+      entry.children.push(await visit(path.posix.join(target, name), depth + 1));
+    }
+    return entry;
+  }
+  const root = await visit(remote, 0);
+  return { root, revision: hash.digest("hex"), count };
+}
+async function previewRemoteRemoval(sftp, remote) {
+  const { root, revision, count } = await removalPlan(sftp, remote);
+  return { directory: root.directory, revision, count };
+}
+async function removeRemote(sftp, remote, revision) {
+  const plan = await removalPlan(sftp, remote);
+  if (plan.revision !== revision)
+    throw new Error("远端删除目标或目录内容已变化，请刷新后重新确认");
+  let files = 0, directories = 0;
+  async function remove(entry) {
+    const current = await removalEntry(sftp, entry.remote);
+    if (current.fingerprint !== entry.fingerprint)
+      throw new Error("远端删除目标已变化，删除已停止：" + entry.remote);
+    if (entry.directory) {
+      for (const child of entry.children) await remove(child);
+      await call(sftp, "rmdir", entry.remote);
+      directories++;
+    } else {
+      await call(sftp, "unlink", entry.remote);
+      files++;
+    }
+  }
+  await remove(plan.root);
+  return { files, directories };
 }
 async function noLocalLink(local) {
   try {
@@ -110,7 +176,7 @@ async function transferTree(s, action, local, remote, progress = () => {}, expec
   else throw new Error("未知传输操作");
   return { files, bytes: completed };
 }
-module.exports = { transferTree, safeName };
+module.exports = { transferTree, safeName, validateRemoteRemoval, previewRemoteRemoval, removeRemote };
 
 async function virtualDragManifest(sftp, remote) {
   const entries = [];

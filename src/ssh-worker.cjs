@@ -1,7 +1,7 @@
 const { Client } = require("ssh2");
 const { TerminalCodec } = require("./codec.cjs");
 const crypto = require("node:crypto");
-const { transferTree, relayTree, virtualDragManifest } = require("./transfers.cjs");
+const { transferTree, relayTree, virtualDragManifest, previewRemoteRemoval, removeRemote } = require("./transfers.cjs");
 const { readRemoteText, saveRemoteText } = require("./remote-text.cjs");
 const connections = new Map();
 const send = (m) => process.connected && process.send(m);
@@ -92,10 +92,18 @@ function getSftp(connection) {
 process.on("message", async (m) => {
   let c = connections.get(m.id);
   try {
+    if (m.type === "duplicate") {
+      const source = connections.get(m.source);
+      if (!source?.stream || source.stream.destroyed) throw new Error("原 SSH 连接已断开");
+      m = { ...m, type: "connect", config: { ...source.config, encoding: source.codec.encoding },
+        password: source.password };
+    }
     if (m.type === "connect") {
       if (c) return;
       c = {
         client: new Client(),
+        config: { ...m.config },
+        password: m.password,
         pending: 0,
         codec: new TerminalCodec(m.config.encoding),
         size: { cols: m.cols || 100, rows: m.rows || 30 },
@@ -146,7 +154,13 @@ process.on("message", async (m) => {
             if (c.pending > 262144) stream.pause();
           });
           stream.on("close", () => c.client.end());
-          send({ type: "ready", id: m.id });
+          if (m.directory) {
+            // ASCII shell input preserves UTF-8 filenames even in a GBK terminal.
+            const octal = Array.from(Buffer.from(m.directory, "utf8"),
+              (byte) => "\\" + byte.toString(8).padStart(3, "0")).join("");
+            stream.write(`cd -- "$(printf '${octal}')"\r`);
+          }
+          send({ type: "ready", id: m.id, directory: m.directory });
         });
       });
       c.client.connect({
@@ -218,6 +232,10 @@ process.on("message", async (m) => {
       let result;
       if (m.action === "read-text") {
         result = await readRemoteText(s, m.path, m.encoding);
+      } else if (m.action === "remove-preview") {
+        result = await previewRemoteRemoval(s, m.path);
+      } else if (m.action === "remove") {
+        result = await removeRemote(s, m.path, m.revision);
       } else if (m.action === "save-text") {
         result = await saveRemoteText(s, m.path, m.text, m.version, m.sourceEncoding, m.encoding, m.forceFormat);
       } else if (m.action === "drag-manifest") {

@@ -11,7 +11,7 @@ const { createWindows } = require("./windows.cjs");
 const { normalizeEncoding } = require("./codec.cjs");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const { safeName } = require("./transfers.cjs");
+const { safeName, validateRemoteRemoval } = require("./transfers.cjs");
 const { installEditorWindows } = require("./editor-windows.cjs");
 const { installLocalDrag } = require("./local-drag.cjs");
 const { existsSync } = require("node:fs");
@@ -19,6 +19,8 @@ const { fork } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
 const { openStore, validateSession } = require("./store.cjs");
 const { openAppSettings, validBackground } = require("./app-settings.cjs");
+const { openPasswordVault } = require("./password-vault.cjs");
+const { createTheme } = require("./theme.mjs");
 const { readImport, previewImport, applyImport, exportOpenSsh } = require("./session-exchange.cjs");
 // Deliberately use software rendering as the initial performance baseline.
 app.setName("JayXTerm");
@@ -63,6 +65,7 @@ const appSettings = hasInstanceLock && openAppSettings(
   safeStorage,
 );
 if (appSettings) app.setPath("sessionData", appSettings.initializeCache());
+const passwordVault = hasInstanceLock && openPasswordVault(path.join(app.getPath("userData"), "quick-passwords.json"), safeStorage);
 const active = new Map(),
   requests = new Map();
 const pendingPasswords = new Map();
@@ -97,7 +100,7 @@ function safeSessions() {
 function request(message) {
   return new Promise((resolve, reject) => {
     const rid = randomUUID();
-    const timer = ["upload", "download", "relay", "save-text"].includes(message.action)
+    const timer = ["upload", "download", "relay", "save-text", "remove"].includes(message.action)
       ? null
       : setTimeout(() => {
           requests.delete(rid);
@@ -120,6 +123,7 @@ app.whenReady().then(() => {
     states,
     send,
     request,
+    background: () => appSettings.describe().backgroundColor,
     isBusy: (id) => busyTransfers.has(id),
     onDisconnect: (id) => {
       active.delete(id);
@@ -325,6 +329,16 @@ function recordPassword(secret, win) {
   }
 }
 ipcMain.handle("settings:get", () => appSettings.describe());
+function themeWindow(win, color) {
+  if (!win || win.isDestroyed()) return;
+  const theme = createTheme(color);
+  win.setBackgroundColor(theme.background);
+  if (process.platform === "win32" && workspace?.get(win.webContents.id))
+    win.setTitleBarOverlay({ color: theme.chrome, symbolColor: theme.ink });
+}
+ipcMain.on("window:theme", (event, color) => {
+  if (validBackground(color)) themeWindow(BrowserWindow.fromWebContents(event.sender), color);
+});
 ipcMain.handle("settings:choose-cache", async (event) => {
   const result = await dialog.showOpenDialog(BrowserWindow.fromWebContents(event.sender), {
     title: "选择缓存所在的文件夹",
@@ -361,7 +375,11 @@ ipcMain.handle("settings:apply", async (event, input) => {
     }
     const result = appSettings.apply({ ...input, migrate });
     if (!result.saveHistory) pendingPasswords.clear();
-    workspace.broadcast({ type: "settings-changed", settings: result }, event.sender.id);
+    for (const win of BrowserWindow.getAllWindows()) {
+      themeWindow(win, result.backgroundColor);
+      if (win.webContents.id !== event.sender.id)
+        win.webContents.send("window:event", { type: "settings-changed", settings: result });
+    }
     return result;
   } finally {
     savingSettings = false;
@@ -369,6 +387,49 @@ ipcMain.handle("settings:apply", async (event, input) => {
 });
 ipcMain.handle("password-history:list", () => appSettings.listHistory());
 ipcMain.handle("password-history:select", (_e, id) => appSettings.selectPassword(id));
+function requirePasswordWorkspace(event) {
+  if (!workspace?.get(event.sender.id) || event.senderFrame !== event.sender.mainFrame)
+    throw new Error("请在工作台中管理快捷密码");
+}
+function broadcastPasswords() {
+  workspace.broadcast({ type: "passwords-changed" });
+}
+ipcMain.handle("password-vault:list", event => {
+  requirePasswordWorkspace(event);
+  return passwordVault.list();
+});
+ipcMain.handle("password-vault:save", (event, input) => {
+  requirePasswordWorkspace(event);
+  const result = passwordVault.save(input);
+  broadcastPasswords();
+  return result;
+});
+ipcMain.handle("password-vault:reveal", (event, id) => {
+  requirePasswordWorkspace(event);
+  return passwordVault.reveal(id);
+});
+ipcMain.handle("password-vault:remove", async (event, id) => {
+  requirePasswordWorkspace(event);
+  const item = passwordVault.list().items.find(entry => entry.id === id);
+  if (!item) throw new Error("这条快捷密码已不存在");
+  const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
+    type: "question", message: `删除快捷密码「${item.description}」？`,
+    buttons: ["取消", "删除"], defaultId: 0, cancelId: 0,
+  });
+  if (response !== 1) return { removed: false };
+  passwordVault.remove(id);
+  broadcastPasswords();
+  return { removed: true };
+});
+ipcMain.handle("password-vault:fill", (event, { id, passwordId }) => {
+  requirePasswordWorkspace(event);
+  ensureOwner(event.sender, id);
+  if (!editorConnectionReady(id)) throw new Error("请先连接 SSH");
+  // Enter/click explicitly selects and submits to its owning connection.
+  // Keep the secret out of the renderer and clipboard.
+  send({ type: "input", id, data: passwordVault.reveal(passwordId) + "\r" });
+  return true;
+});
 ipcMain.handle("ssh:test", (e, input) => {
   const config = validateSession({
     ...input,
@@ -402,9 +463,10 @@ ipcMain.handle("ssh:encoding", async (e, { id, encoding }) => {
   return result;
 });
 ipcMain.handle("sessions:save", (e, input) => {
-  const s = validateSession(input),
-    d = store.get(),
-    old = d.sessions.find((x) => x.id === s.id);
+  const d = store.get();
+  const old = d.sessions.find((x) => x.id === input.id);
+  const s = validateSession({ ...input,
+    encoding: input.encoding ?? old?.encoding ?? appSettings.describe().defaultEncoding });
   if (input.remember) {
     if (
       !safeStorage.isEncryptionAvailable() ||
@@ -479,9 +541,45 @@ ipcMain.on("ssh:send", (e, m) => {
   )
     send(m);
 });
+ipcMain.handle("ssh:duplicate", (event, { id: source, directory, cols, rows }) => {
+  ensureOwner(event.sender, source);
+  if (!editorConnectionReady(source)) throw new Error("请先连接 SSH");
+  if (typeof directory !== "string" || !directory.startsWith("/") ||
+      /[\x00-\x1f\x7f]/.test(directory) || directory.length > 16384)
+    throw new Error("无法获取有效的 SSH 当前目录");
+  const id = randomUUID();
+  active.set(id, { ...active.get(source) });
+  owners.set(id, event.sender.id);
+  states.set(id, "connecting");
+  send({ type: "duplicate", id, source, directory, cols, rows });
+  return id;
+});
 ipcMain.handle("sftp:list", (e, { id, path: remote }) => {
   ensureOwner(e.sender, id);
   return request({ id, action: "list", path: remote });
+});
+ipcMain.handle("sftp:remove", async (event, { id, path: remote }) => {
+  ensureOwner(event.sender, id);
+  validateRemoteRemoval(remote);
+  if (!editorConnectionReady(id)) throw new Error("请先连接 SSH");
+  if (busyTransfers.has(id)) throw new Error("请等待当前文件操作完成");
+  busyTransfers.add(id);
+  try {
+    const preview = await request({ id, action: "remove-preview", path: remote });
+    if (!editorConnectionReady(id)) throw new Error("SSH 已断开，未执行删除");
+    const { response } = await dialog.showMessageBox(parentFor(id), {
+      type: "warning", title: "删除远端文件",
+      message: preview.directory ? `删除此远端目录及其中的 ${preview.count - 1} 项？` : "删除此远端文件？",
+      detail: `${active.get(id).name}\n${remote}\n\n删除后无法撤销。`,
+      buttons: ["取消", "删除"], defaultId: 0, cancelId: 0,
+    });
+    if (response !== 1) return { cancelled: true };
+    ensureOwner(event.sender, id);
+    if (!editorConnectionReady(id)) throw new Error("SSH 已断开，未执行删除");
+    return await request({ id, action: "remove", path: remote, revision: preview.revision });
+  } finally {
+    busyTransfers.delete(id);
+  }
 });
 ipcMain.handle("ssh:directory", (event, id) => {
   ensureOwner(event.sender, id);
@@ -491,6 +589,7 @@ function editorConnectionReady(id) {
   return active.has(id) && states.get(id) === "ready" && !workspace.moves.has(id);
 }
 installEditorWindows({
+  background: () => appSettings.describe().backgroundColor,
   request,
   connected: editorConnectionReady,
   ensureOwner(sender, id) {

@@ -2,7 +2,7 @@ const { BrowserWindow, dialog, ipcMain, screen } = require("electron");
 const path = require("node:path");
 const { maxFileBytes } = require("./remote-text.cjs");
 
-function installEditorWindows({ ensureOwner, request, connected, didSave }) {
+function installEditorWindows({ ensureOwner, request, connected, didSave, background }) {
   const files = new Map();
   const windows = new Map();
   const encoding = (value) => {
@@ -24,7 +24,7 @@ function installEditorWindows({ ensureOwner, request, connected, didSave }) {
       x: area.x + Math.min(area.width - width, 54 + offset),
       y: area.y + Math.min(area.height - height, 52 + offset),
       show: false,
-      backgroundColor: "#15191f",
+      backgroundColor: background(),
       title: `${file.name} · ${file.server} · JayXTerm`,
       webPreferences: {
         preload: path.join(__dirname, "editor-preload.cjs"),
@@ -114,7 +114,7 @@ function installEditorWindows({ ensureOwner, request, connected, didSave }) {
     const file = editor(event);
     const data = file.data;
     file.data = null;
-    return { ...data, server: file.server, name: file.name, path: file.path };
+    return { ...data, server: file.server, name: file.name, path: file.path, backgroundColor: background() };
   });
   ipcMain.on("editor:dirty", (event, dirty) => {
     const file = windows.get(event.sender.id);

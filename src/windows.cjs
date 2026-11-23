@@ -1,6 +1,7 @@
 const { BrowserWindow, dialog, ipcMain, Menu, screen } = require("electron");
 const { randomUUID } = require("node:crypto");
 const path = require("node:path");
+const { createTheme } = require("./theme.mjs");
 // Window metadata changes only on user actions, never on terminal output.
 function createWindows({
   active,
@@ -10,6 +11,7 @@ function createWindows({
   request,
   onDisconnect,
   isBusy,
+  background,
 }) {
   const windows = new Map(),
     moves = new Set(),
@@ -73,6 +75,7 @@ function createWindows({
     windows.delete(id);
   }
   function create() {
+    const theme = createTheme(background());
     const offset = (number++ % 6) * 26;
     const focused = BrowserWindow.getFocusedWindow();
     const bounds = focused?.getBounds();
@@ -97,11 +100,11 @@ function createWindows({
       minHeight: Math.min(650, area.height),
       x,
       y,
-      backgroundColor: "#394351",
+      backgroundColor: theme.background,
       title: `JayXTerm · 窗口 ${number}`,
       ...(process.platform === "win32" && {
         titleBarStyle: "hidden",
-        titleBarOverlay: { color: "#3b4553", symbolColor: "#c2cbd7", height: 54 },
+        titleBarOverlay: { color: theme.chrome, symbolColor: theme.ink, height: 54 },
       }),
       webPreferences: {
         preload: path.join(__dirname, "preload.cjs"),
@@ -276,6 +279,12 @@ function createWindows({
     assertOwner(e.sender, id);
     const win = get(e.sender.id);
     const items = [
+      {
+        label: "复制会话及路径",
+        enabled: states.get(id) === "ready" && !moves.has(id),
+        click: () => emit(win, { type: "duplicate-tab", id }),
+      },
+      { type: "separator" },
       {
         label: "移到新窗口",
         enabled: states.get(id) === "ready" && !moves.has(id),

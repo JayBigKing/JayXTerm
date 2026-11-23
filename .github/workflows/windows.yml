@@ -23,6 +23,9 @@ jobs:
         env:
           JAYXTERM_LOCAL_DRAG_QA: '1'
           JAYXTERM_SESSION_EXCHANGE_QA: '1'
+          JAYXTERM_SETTINGS_QA: '1'
+          JAYXTERM_FEATURES_QA: '1'
+          JAYXTERM_ASSIST_QA: '1'
         run: |
           ./scripts/windows.ps1 smoke
       - name: Package Windows x64
