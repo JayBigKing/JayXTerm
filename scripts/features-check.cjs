@@ -86,9 +86,10 @@ async function check(win, fixture) {
     fixture.files.set(folder + "/nested.txt", Buffer.from("nested"));
     await run(`$('#remote-path').value = '/home/jay'; $('#path-form').requestSubmit();
       await wait(() => [...document.querySelectorAll('#file-list .filename')].some(node => node.textContent === ${JSON.stringify(path.posix.basename(deletedFile))}));`);
-    let response = 0, confirmations = [];
+    let response = 0, confirmations = [], beforeConfirm;
     dialog.showMessageBox = async (_parent, options) => {
       confirmations.push(options);
+      beforeConfirm?.();
       return { response };
     };
     const clickDelete = (name, selector = "#file-list") => run(`
@@ -113,6 +114,11 @@ async function check(win, fixture) {
     fixture.directory.path = "/home/jay";
     await run(`$('#file-workspace-toggle').click();
       await wait(() => [...document.querySelectorAll('.terminal-group.focused .workspace-files .filename')].some(node => node.textContent === 'delete-tree'));`);
+    const newFile = folder + "/created-after-preview.txt";
+    beforeConfirm = () => fixture.files.set(newFile, Buffer.from("keep"));
+    await clickDelete("delete-tree", ".terminal-group.focused .workspace-files");
+    assert.ok(fixture.dirs.has(folder) && fixture.files.has(folder + "/nested.txt") && fixture.files.has(newFile));
+    beforeConfirm = null;
     await clickDelete("delete-tree", ".terminal-group.focused .workspace-files");
     assert.ok(!fixture.dirs.has(folder) && !fixture.dirs.has(folder + "/empty"));
     assert.ok(!fixture.files.has(folder + "/nested.txt"));

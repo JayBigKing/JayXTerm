@@ -262,7 +262,8 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
       positionPicker();
       return;
     }
-    if (!items.some(item => item.id === selectedId)) selectedId = items[0].id;
+    if (!items.some(item => item.id === selectedId))
+      selectedId = target?.tab && target.automatic ? null : items[0].id;
     for (const item of items) {
       const button = element("button", "quick-password-option");
       button.dataset.passwordId = item.id;
@@ -274,7 +275,7 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
       button.onclick = () => {
         if (target === selection && pickerVersion === version) choose(item);
       };
-      button.onfocus = () => selectOption(button);
+      if (!(target?.tab && target.automatic)) button.onfocus = () => selectOption(button);
       options.append(button);
     }
     positionPicker();
@@ -343,9 +344,9 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     if (["ArrowDown", "ArrowUp"].includes(event.key)) moveOption(event);
     else if (event.key === "Enter" && (terminalInput || pickerInput)) {
       const selected = options.querySelector('button[aria-selected="true"]');
-      if (selected) {
+      if (selected || (target.automatic && target.tab && pickerInput)) {
         event.preventDefault(); event.stopPropagation();
-        if (!event.repeat) selected.click();
+        if (!event.repeat) selected?.click();
       }
     }
   }, true);

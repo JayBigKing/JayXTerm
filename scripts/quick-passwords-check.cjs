@@ -136,6 +136,15 @@ async function check(win, fixture) {
     await waitFor(() => fixture.inputs.length > inputStart);
     assert.deepEqual(Buffer.concat(fixture.inputs.slice(inputStart)), Buffer.from("qa-password\r"), "Enter must fill and submit exactly once");
 
+    stream.write("\r\nPassword: ");
+    await run(`await wait(pickerOpen, 'prompt before plain Enter');
+      if ($('.quick-password-option[aria-selected="true"]')) throw new Error('Automatic candidates must have no default selection');`);
+    const plainEnterStart = fixture.inputs.length;
+    press("Return");
+    await run("await wait(() => !pickerOpen());");
+    await waitFor(() => fixture.inputs.length > plainEnterStart);
+    assert.deepEqual(Buffer.concat(fixture.inputs.slice(plainEnterStart)), Buffer.from("\r"), "Plain Enter must not send a saved password");
+
     const dimensions = await run("return { rows: Number($('.terminal-pane.active').dataset.rows), cols: Number($('.terminal-pane.active').dataset.cols) };");
     stream.write(`\x1b[${dimensions.rows};${dimensions.cols - 10}H\x1b[2KPassword: `);
     await run(`await wait(pickerOpen, 'prompt near window edges');

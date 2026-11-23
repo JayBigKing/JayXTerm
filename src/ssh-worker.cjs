@@ -1,7 +1,7 @@
 const { Client } = require("ssh2");
 const { TerminalCodec } = require("./codec.cjs");
 const crypto = require("node:crypto");
-const { transferTree, relayTree, virtualDragManifest, removeRemote } = require("./transfers.cjs");
+const { transferTree, relayTree, virtualDragManifest, previewRemoteRemoval, removeRemote } = require("./transfers.cjs");
 const { readRemoteText, saveRemoteText } = require("./remote-text.cjs");
 const connections = new Map();
 const send = (m) => process.connected && process.send(m);
@@ -232,8 +232,10 @@ process.on("message", async (m) => {
       let result;
       if (m.action === "read-text") {
         result = await readRemoteText(s, m.path, m.encoding);
+      } else if (m.action === "remove-preview") {
+        result = await previewRemoteRemoval(s, m.path);
       } else if (m.action === "remove") {
-        result = await removeRemote(s, m.path, m.directory);
+        result = await removeRemote(s, m.path, m.revision);
       } else if (m.action === "save-text") {
         result = await saveRemoteText(s, m.path, m.text, m.version, m.sourceEncoding, m.encoding, m.forceFormat);
       } else if (m.action === "drag-manifest") {

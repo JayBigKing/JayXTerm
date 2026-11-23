@@ -2,7 +2,7 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { safeName, transferTree, removeRemote } = require("./transfers.cjs");
+const { safeName, transferTree, previewRemoteRemoval, removeRemote } = require("./transfers.cjs");
 test("remote names cannot escape or overwrite Windows device paths", () => {
   for (const name of [
     "..",
@@ -42,10 +42,19 @@ test("remote deletion rejects root/traversal and never follows symbolic links", 
     },
   };
   for (const target of ["/", "/tree/..", "/tree/", "/tree//nested", "tree", "/tree\0"])
-    await assert.rejects(removeRemote(sftp, target, true), /删除路径/);
-  await assert.rejects(removeRemote(sftp, "/tree", false), /类型已变化/);
+    await assert.rejects(previewRemoteRemoval(sftp, target), /删除路径/);
+  const preview = await previewRemoteRemoval(sftp, "/tree");
+  assert.equal(preview.directory, true);
+  assert.equal(preview.count, 4);
+  entries.set("/tree", "file");
+  await assert.rejects(removeRemote(sftp, "/tree", preview.revision), /已变化/);
+  entries.set("/tree", "directory");
+  entries.set("/tree/replacement.txt", "file");
+  await assert.rejects(removeRemote(sftp, "/tree", preview.revision), /已变化/);
   assert.deepEqual(removed, []);
-  assert.deepEqual(await removeRemote(sftp, "/tree", true), { files: 2, directories: 2 });
+  assert.equal(entries.has("/tree/replacement.txt"), true);
+  entries.delete("/tree/replacement.txt");
+  assert.deepEqual(await removeRemote(sftp, "/tree", preview.revision), { files: 2, directories: 2 });
   assert.equal(entries.has("/outside"), true);
   assert.equal(removed.at(-1), "/tree");
 });
@@ -54,13 +63,15 @@ test("remote deletion stops on changed parent paths and propagates permission er
   let unlinked = false;
   const sftp = {
     lstat: (_target, cb) => cb(null, { isDirectory: () => false, isSymbolicLink: () => false }),
-    realpath: (_target, cb) => cb(null, "/elsewhere"),
+    realpath: (target, cb) => cb(null, target),
     unlink: (_target, cb) => { unlinked = true; cb(new Error("Permission denied")); },
   };
-  await assert.rejects(removeRemote(sftp, "/folder/file", false), /父目录已变化/);
+  const { revision } = await previewRemoteRemoval(sftp, "/folder/file");
+  sftp.realpath = (_target, cb) => cb(null, "/elsewhere");
+  await assert.rejects(removeRemote(sftp, "/folder/file", revision), /父目录已变化/);
   assert.equal(unlinked, false);
   sftp.realpath = (target, cb) => cb(null, target);
-  await assert.rejects(removeRemote(sftp, "/folder/file", false), /Permission denied/);
+  await assert.rejects(removeRemote(sftp, "/folder/file", revision), /Permission denied/);
 });
 test("recursive download rejects symlinks and case collisions", async () => {
   const dir = await fs.mkdtemp(path.resolve(".codex-cache/tmp/transfer-"));

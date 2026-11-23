@@ -565,19 +565,18 @@ ipcMain.handle("sftp:remove", async (event, { id, path: remote }) => {
   if (busyTransfers.has(id)) throw new Error("请等待当前文件操作完成");
   busyTransfers.add(id);
   try {
-    const stat = await request({ id, action: "stat", path: remote });
-    if (!stat.exists) throw new Error("远端文件已不存在，请刷新目录");
+    const preview = await request({ id, action: "remove-preview", path: remote });
     if (!editorConnectionReady(id)) throw new Error("SSH 已断开，未执行删除");
     const { response } = await dialog.showMessageBox(parentFor(id), {
       type: "warning", title: "删除远端文件",
-      message: stat.directory ? "删除此远端目录及其所有内容？" : "删除此远端文件？",
+      message: preview.directory ? `删除此远端目录及其中的 ${preview.count - 1} 项？` : "删除此远端文件？",
       detail: `${active.get(id).name}\n${remote}\n\n删除后无法撤销。`,
       buttons: ["取消", "删除"], defaultId: 0, cancelId: 0,
     });
     if (response !== 1) return { cancelled: true };
     ensureOwner(event.sender, id);
     if (!editorConnectionReady(id)) throw new Error("SSH 已断开，未执行删除");
-    return await request({ id, action: "remove", path: remote, directory: stat.directory });
+    return await request({ id, action: "remove", path: remote, revision: preview.revision });
   } finally {
     busyTransfers.delete(id);
   }
