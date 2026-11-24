@@ -71,7 +71,7 @@ powershell -ExecutionPolicy Bypass -File scripts/windows.ps1 package
 
 推送 `jay_version` 或主分支以及提交 Pull Request 时，GitHub Actions 会自动测试 Windows 和 macOS。
 
-发版时，在 [Actions 的构建页面](https://github.com/JayBigKing/JayXTerm/actions/workflows/windows.yml) 点击 **Run workflow**，选择 `jay_version` 并运行。测试通过后，Actions 会根据 `package.json` 的版本号创建标签和 Release，并上传 Windows x64 安装版、便携版、Mac Apple Silicon DMG 和 SHA-256 校验文件。下一次发版前更新 `package.json` 与 `package-lock.json` 的版本号。
+发版时，在 [Actions 的构建页面](https://github.com/JayBigKing/JayXTerm/actions/workflows/windows.yml) 点击 **Run workflow**，选择要构建的分支（`main` 或 `jay_version`）。测试通过后，Actions 会根据该分支 `package.json` 的版本号创建标签和 Release，并上传 Windows x64 安装版、便携版、Mac Apple Silicon DMG 和 SHA-256 校验文件。两个分支共用仓库的版本标签，发版前请在 `package.json` 与 `package-lock.json` 中使用尚未发布的版本号。
 
 ## 参与贡献
 

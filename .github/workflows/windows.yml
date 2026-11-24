@@ -82,22 +82,25 @@ jobs:
         run: |
           npm ci
           npm test
-      - name: Build renderer and verify Finder drag module
+      - name: Build renderer
+        run: npm run build
+      - name: Build and verify Finder drag module when available
         run: |
-          npm run build
-          npm run build:finder-drag
-          ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e '
-            const assert = require("node:assert/strict");
-            const binding = require("./.codex-cache/build/native/jayxterm-finder-drag.node");
-            assert.equal(process.arch, "arm64");
-            assert.equal(typeof binding.arm, "function");
-            assert.equal(typeof binding.publish, "function");
-          '
+          if [[ -f scripts/build-finder-drag.cjs ]]; then
+            npm run build:finder-drag
+            ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e '
+              const assert = require("node:assert/strict");
+              const binding = require("./.codex-cache/build/native/jayxterm-finder-drag.node");
+              assert.equal(process.arch, "arm64");
+              assert.equal(typeof binding.arm, "function");
+              assert.equal(typeof binding.publish, "function");
+            '
+          fi
       - name: Package Mac Apple Silicon
         if: github.event_name == 'workflow_dispatch'
         run: |
           ./node_modules/.bin/electron-builder --mac dmg --arm64 --publish never \
-            --config.electronDist=node_modules/electron/dist \
+            --config.electronDist=node_modules/electron/dist --config.mac.icon=assets/jayxterm.png \
             --config.mac.identity=- --config.mac.hardenedRuntime=false --config.dmg.sign=false
           version="$(node -p 'require("./package.json").version')"
           hdiutil verify ".codex-cache/releases/JayXTerm-${version}-arm64.dmg"
