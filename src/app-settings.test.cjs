@@ -67,28 +67,35 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(initial.cjkFontFamily, "");
   assert.equal(initial.fontSize, 14);
   assert.equal(initial.defaultEncoding, "utf-8");
-  assert.equal(initial.highlightKeywords, true);
+  assert.equal(initial.highlightKeywords, false);
+  assert.equal(initial.terminalSearchEnabled, false);
+  assert.equal(initial.quickPasswordsEnabled, false);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
-  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: false });
+  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: true, terminalSearchEnabled: true, quickPasswordsEnabled: true });
   const reloaded = open();
   assert.equal(reloaded.describe().fontFamily, "Consolas");
   assert.equal(reloaded.describe().cjkFontFamily, "Microsoft YaHei");
   assert.equal(reloaded.describe().fontSize, 20);
   assert.equal(reloaded.describe().defaultEncoding, "gb2312");
-  assert.equal(reloaded.describe().highlightKeywords, false);
+  assert.equal(reloaded.describe().highlightKeywords, true);
   reloaded.apply({ ...base, backgroundColor: "#ffffff" });
   assert.equal(open().describe().fontSize, 20);
   assert.equal(open().describe().cjkFontFamily, "Microsoft YaHei");
-  assert.equal(open().describe().highlightKeywords, false);
+  assert.equal(open().describe().highlightKeywords, true);
+  assert.equal(open().describe().terminalSearchEnabled, true);
+  assert.equal(open().describe().quickPasswordsEnabled, true);
   const previous = fs.readFileSync(file, "utf8");
   for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
     { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" },
     { cjkFontFamily: null }, { cjkFontFamily: "   " }, { cjkFontFamily: 'bad" font' },
-    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }]) {
-    assert.throws(() => open().apply({ ...base, ...invalid }), /终端设置/);
+    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { terminalSearchEnabled: null }, { quickPasswordsEnabled: 1 }]) {
+    assert.throws(() => open().apply({ ...base, ...invalid }), /终端(设置|功能开关)/);
     assert.equal(fs.readFileSync(file, "utf8"), previous);
   }
-  reloaded.apply({ ...base, cjkFontFamily: "" });
+  reloaded.apply({ ...base, cjkFontFamily: "", highlightKeywords: false, terminalSearchEnabled: false, quickPasswordsEnabled: false });
+  assert.equal(open().describe().highlightKeywords, false);
+  assert.equal(open().describe().terminalSearchEnabled, false);
+  assert.equal(open().describe().quickPasswordsEnabled, false);
   assert.equal(open().describe().cjkFontFamily, "");
   // Existing installations keep their chosen font and gain automatic CJK fallback.
   fs.writeFileSync(file, JSON.stringify({ fontFamily: "Consolas", fontSize: 16 }));

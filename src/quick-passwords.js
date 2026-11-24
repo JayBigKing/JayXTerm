@@ -32,7 +32,7 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
   const options = $("#quick-password-options"), terminalButton = $("#terminal-passwords");
   let metadata = { available: true, items: [] }, loaded = false, loading;
   let dataVersion = 0, rowVersion = 0, editVersion = 0, pickerVersion = 0, target, selectedId;
-  let suppressFocus;
+  let suppressFocus, runtime;
   const watchers = new Map();
   function concealRows() {
     rowVersion++;
@@ -46,7 +46,7 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     }
   }
   function renderVault() {
-    if (!settings.open) return;
+    if (!runtime || !settings.open || passwordPanel.hidden) return;
     concealRows();
     vaultList.replaceChildren();
     $("#vault-add").disabled = !metadata.available;
@@ -100,6 +100,7 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     }
   }
   function load(force = false) {
+    if (!runtime) return Promise.resolve(metadata);
     if (!force && loaded) return Promise.resolve(metadata);
     if (!force && loading) return loading;
     const version = ++dataVersion;
@@ -166,19 +167,24 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     } catch (error) { if (version === editVersion) $("#quick-password-error").textContent = error.message; }
     finally { button.disabled = false; }
   };
-  new MutationObserver(() => {
-    if (settings.open) load(true).catch(error => { $("#vault-note").textContent = error.message; });
+  function loadVisibleVault() {
+    if (!settings.open || passwordPanel.hidden) return;
+    if (loaded) renderVault();
+    else load().catch(error => { $("#vault-note").textContent = error.message; });
+  }
+  const settingsObserver = new MutationObserver(() => {
+    if (settings.open) loadVisibleVault();
     else {
       concealRows(); vaultList.replaceChildren();
       if (editor.open) editor.close();
       watchers.get(getActiveTab()?.id)?.schedule();
     }
-  }).observe(settings, { attributes: true, attributeFilter: ["open"] });
+  });
   // Cover mouse, keyboard and validation-driven section changes alike.
-  new MutationObserver(() => {
+  const panelObserver = new MutationObserver(() => {
     if (passwordPanel.hidden) concealRows();
-  }).observe(passwordPanel, { attributes: true, attributeFilter: ["hidden"] });
-  window.addEventListener("blur", concealRows);
+    else loadVisibleVault();
+  });
 
   function closePicker() {
     pickerVersion++;
@@ -281,6 +287,7 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     positionPicker();
   }
   async function openPicker(selection) {
+    if (!runtime) return;
     closePicker();
     const version = pickerVersion;
     try {
@@ -323,11 +330,11 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     await $("#settings-open").onclick();
     $("#settings-tab-passwords").click();
   };
-  document.addEventListener("pointerdown", event => {
+  function handlePointer(event) {
     if (target && !picker.contains(event.target) && event.target !== target.field &&
         !event.target.closest(".password-book-button, #terminal-passwords")) closePicker();
-  }, true);
-  document.addEventListener("keydown", event => {
+  }
+  function handleKey(event) {
     if (!target || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.key === "Escape") {
       event.preventDefault(); event.stopPropagation();
@@ -349,32 +356,60 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
         if (!event.repeat) selected?.click();
       }
     }
-  }, true);
-  window.addEventListener("resize", positionPicker);
+  }
   terminalButton.onclick = () => {
     if (target?.tab) { closePicker(); return; }
     showTerminal();
     const tab = getActiveTab();
     if (tab) openPicker({ tab, automatic: false });
   };
-  function attachField(field, button, toggle) {
+  function attachField(field, button, toggle, signal) {
     field.setAttribute("aria-controls", picker.id);
     field.setAttribute("aria-expanded", "false");
-    field.addEventListener("focus", () => { if (!field.value && suppressFocus !== field) openPicker({ field, toggle, automatic: true }); });
-    field.addEventListener("input", () => { if (target?.field === field) closePicker(); });
-    field.closest("dialog").addEventListener("close", () => { if (target?.field === field) closePicker(); });
-    button.onclick = () => {
+    field.addEventListener("focus", () => { if (!field.value && suppressFocus !== field) openPicker({ field, toggle, automatic: true }); }, { signal });
+    field.addEventListener("input", () => { if (target?.field === field) closePicker(); }, { signal });
+    field.closest("dialog").addEventListener("close", () => { if (target?.field === field) closePicker(); }, { signal });
+    button.addEventListener("click", () => {
       if (target?.field === field) closePicker();
       else openPicker({ field, toggle, automatic: false });
-    };
+    }, { signal });
   }
-  attachField($("#session-form").elements.password, $("#session-quick-password"), $("#toggle-password"));
-  attachField($("#connect-password"), $("#connect-quick-password"), $("#toggle-connect-password"));
-  api.onWindow(event => {
-    if (event.type === "passwords-changed") load(true).catch(error => toast(error.message));
-  });
+  const sessionButton = $("#session-quick-password"), connectButton = $("#connect-quick-password");
   return {
+    setEnabled(enabled) {
+      for (const control of [terminalButton, sessionButton, connectButton, $("#vault-controls")])
+        control.hidden = !enabled;
+      if (enabled) {
+        runtime = new AbortController();
+        const { signal } = runtime;
+        document.addEventListener("pointerdown", handlePointer, { capture: true, signal });
+        document.addEventListener("keydown", handleKey, { capture: true, signal });
+        window.addEventListener("resize", positionPicker, { signal });
+        window.addEventListener("blur", concealRows, { signal });
+        attachField($("#session-form").elements.password, sessionButton, $("#toggle-password"), signal);
+        attachField($("#connect-password"), connectButton, $("#toggle-connect-password"), signal);
+        settingsObserver.observe(settings, { attributes: true, attributeFilter: ["open"] });
+        panelObserver.observe(passwordPanel, { attributes: true, attributeFilter: ["hidden"] });
+        loadVisibleVault();
+      } else {
+        runtime?.abort();
+        runtime = null;
+        settingsObserver.disconnect();
+        panelObserver.disconnect();
+        closePicker();
+        if (editor.open) editor.close();
+        concealRows();
+        vaultList.replaceChildren();
+        dataVersion++;
+        metadata = { available: true, items: [] };
+        loaded = false;
+        loading = null;
+        terminalButton.disabled = true;
+      }
+    },
+    refresh() { load(true).catch(error => toast(error.message)); },
     activate() {
+      if (!runtime) return;
       const tab = getActiveTab();
       terminalButton.disabled = !tab || tab.state !== "已连接" || tab.moving;
       if (target?.tab && !validTarget(target)) closePicker();
@@ -382,7 +417,7 @@ export function installQuickPasswords({ api, getActiveTab, showTerminal, toast }
     },
     userInput(tab) {
       watchers.get(tab.id)?.suppress();
-      if (!target || target.tab === tab) closePicker();
+      if (target?.tab === tab) closePicker();
     },
     watch(tab) {
       let frame, disposed = false, lastPrompt, promptMarker;

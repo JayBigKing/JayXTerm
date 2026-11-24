@@ -65,7 +65,7 @@ const appSettings = hasInstanceLock && openAppSettings(
   safeStorage,
 );
 if (appSettings) app.setPath("sessionData", appSettings.initializeCache());
-const passwordVault = hasInstanceLock && openPasswordVault(path.join(app.getPath("userData"), "quick-passwords.json"), safeStorage);
+let passwordVault;
 const active = new Map(),
   requests = new Map();
 const pendingPasswords = new Map();
@@ -375,6 +375,7 @@ ipcMain.handle("settings:apply", async (event, input) => {
     }
     const result = appSettings.apply({ ...input, migrate });
     if (!result.saveHistory) pendingPasswords.clear();
+    if (!result.quickPasswordsEnabled) passwordVault = undefined;
     for (const win of BrowserWindow.getAllWindows()) {
       themeWindow(win, result.backgroundColor);
       if (win.webContents.id !== event.sender.id)
@@ -387,47 +388,46 @@ ipcMain.handle("settings:apply", async (event, input) => {
 });
 ipcMain.handle("password-history:list", () => appSettings.listHistory());
 ipcMain.handle("password-history:select", (_e, id) => appSettings.selectPassword(id));
-function requirePasswordWorkspace(event) {
+function requirePasswordVault(event) {
   if (!workspace?.get(event.sender.id) || event.senderFrame !== event.sender.mainFrame)
     throw new Error("请在工作台中管理快捷密码");
+  if (!appSettings.describe().quickPasswordsEnabled)
+    throw new Error("快捷密码本已关闭");
+  return passwordVault ??= openPasswordVault(path.join(app.getPath("userData"), "quick-passwords.json"), safeStorage);
 }
 function broadcastPasswords() {
   workspace.broadcast({ type: "passwords-changed" });
 }
 ipcMain.handle("password-vault:list", event => {
-  requirePasswordWorkspace(event);
-  return passwordVault.list();
+  return requirePasswordVault(event).list();
 });
 ipcMain.handle("password-vault:save", (event, input) => {
-  requirePasswordWorkspace(event);
-  const result = passwordVault.save(input);
+  const result = requirePasswordVault(event).save(input);
   broadcastPasswords();
   return result;
 });
 ipcMain.handle("password-vault:reveal", (event, id) => {
-  requirePasswordWorkspace(event);
-  return passwordVault.reveal(id);
+  return requirePasswordVault(event).reveal(id);
 });
 ipcMain.handle("password-vault:remove", async (event, id) => {
-  requirePasswordWorkspace(event);
-  const item = passwordVault.list().items.find(entry => entry.id === id);
+  const item = requirePasswordVault(event).list().items.find(entry => entry.id === id);
   if (!item) throw new Error("这条快捷密码已不存在");
   const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
     type: "question", message: `删除快捷密码「${item.description}」？`,
     buttons: ["取消", "删除"], defaultId: 0, cancelId: 0,
   });
   if (response !== 1) return { removed: false };
-  passwordVault.remove(id);
+  requirePasswordVault(event).remove(id);
   broadcastPasswords();
   return { removed: true };
 });
 ipcMain.handle("password-vault:fill", (event, { id, passwordId }) => {
-  requirePasswordWorkspace(event);
+  const vault = requirePasswordVault(event);
   ensureOwner(event.sender, id);
   if (!editorConnectionReady(id)) throw new Error("请先连接 SSH");
   // Enter/click explicitly selects and submits to its owning connection.
   // Keep the secret out of the renderer and clipboard.
-  send({ type: "input", id, data: passwordVault.reveal(passwordId) + "\r" });
+  send({ type: "input", id, data: vault.reveal(passwordId) + "\r" });
   return true;
 });
 ipcMain.handle("ssh:test", (e, input) => {

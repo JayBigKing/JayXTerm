@@ -13,6 +13,15 @@ async function check(win, fixture) {
       }
       throw new Error('Terminal assistance timed out: ' + check + ' / search=' + $('#terminal-search-count').textContent + ' / ' + $('#toast').textContent);
     };
+    const setToggles = async (highlight, search) => {
+      $('#settings-open').click();
+      await wait(() => $('#settings-dialog').open);
+      const form = $('#settings-form');
+      form.elements.highlightKeywords.checked = highlight;
+      form.elements.terminalSearchEnabled.checked = search;
+      form.requestSubmit();
+      await wait(() => !$('#settings-dialog').open);
+    };
     ${code}
   })()`);
   const stream = [...fixture.streams][0];
@@ -21,6 +30,10 @@ async function check(win, fixture) {
   const samples = { "sample.txt": "text", "main.cpp": "code", "deploy.sh": "shell", ".env": "config",
     "photo.png": "image", "build.tar.gz": "archive", "manual.pdf": "pdf", "data.sqlite": "database" };
   try {
+    assert.equal(original.highlightKeywords, false);
+    assert.equal(original.terminalSearchEnabled, false);
+    assert.equal(await run("return !$('#terminal-search-toggle').checkVisibility();"), true);
+    await run("await setToggles(true, true);");
     console.log("Checking visible keyword colors and compact file icons");
     for (const name of Object.keys(samples)) fixture.files.set("/home/jay/" + name, Buffer.from("UI fixture only"));
     await run(`$('#remote-path').value = '/home/jay'; $('#path-form').requestSubmit();
@@ -108,13 +121,23 @@ async function check(win, fixture) {
       $('#file-workspace-toggle').click(); $('#terminal-search-toggle').click();
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       if (document.activeElement !== $('#terminal-search-input') || $('#file-workspace-toggle').getAttribute('aria-pressed') !== 'false') throw new Error('Opening search from file space lost keyboard focus');
-      $('#terminal-search-close').click();`);
+      $('#terminal-search-input').value = 'Success';
+      $('#terminal-search-input').dispatchEvent(new Event('input'));
+      await wait(() => $('#terminal-search-count').textContent === '1 / 1');
+      await setToggles(false, false);
+      if ($('#terminal-search-toggle').checkVisibility() || !$('#terminal-search').hidden ||
+          $('#terminal-search-count').textContent !== '0 / 0' || $('.terminal-keyword'))
+        throw new Error('Saving off did not clear search and keyword decorations');
+    `);
+    stream.write("\x1b[3J\x1b[2J\x1b[HSuccess after disable\r\n");
+    await run(`await wait(() => $('.terminal-pane.active .xterm-rows').textContent.includes('Success after disable'));
+      if ($('.terminal-keyword')) throw new Error('New terminal output was still highlighted');`);
     console.log("PASS: keyword colors, Unicode cells, alternate-screen exclusion, scrollback/wrapped search, navigation, tab scope, compact SVG file and delete icons");
   } finally {
     await run(`if ($('#settings-dialog').open) $('#settings-cancel').click();
       if (!$('#terminal-search').hidden) $('#terminal-search-close').click();
       for (const tab of document.querySelectorAll('.tab')) if (tab.dataset.connection !== ${JSON.stringify(source)}) tab.querySelector('.close').click();
-      await api.applySettings(${JSON.stringify({ ...original, cachePath: original.pendingCache ?? original.cachePath })});`);
+      await setToggles(${original.highlightKeywords}, ${original.terminalSearchEnabled});`);
     stream.write("\x1b[?1049l\r\n");
     for (const name of Object.keys(samples)) fixture.files.delete("/home/jay/" + name);
     await run("$('#remote-path').value = '/home/jay'; $('#path-form').requestSubmit();");

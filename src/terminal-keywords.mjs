@@ -59,7 +59,7 @@ export function visibleKeywordSpans(buffer, cols, rows) {
   return spans;
 }
 
-export function installKeywordHighlights(term, theme, enabled = true) {
+export function installKeywordHighlights(term, theme) {
   let frame, disposed = false;
   const rendered = new Map();
   const remove = entry => {
@@ -74,7 +74,7 @@ export function installKeywordHighlights(term, theme, enabled = true) {
     frame = null;
     if (disposed) return;
     const buffer = term.buffer.active;
-    if (!enabled || buffer.type !== "normal" || !term.element.checkVisibility({ visibilityProperty: true })) { clear(); return; }
+    if (buffer.type !== "normal" || !term.element.checkVisibility({ visibilityProperty: true })) { clear(); return; }
     const colors = { ...theme.variables, info: theme.accent };
     const spans = visibleKeywordSpans(buffer, term.cols, term.rows);
     for (const [row, entry] of rendered) {
@@ -109,7 +109,6 @@ export function installKeywordHighlights(term, theme, enabled = true) {
   schedule();
   return {
     refresh: schedule,
-    setEnabled(value) { enabled = value; if (!enabled) clear(); else schedule(); },
     setTheme(value) { theme = value; clear(); schedule(); },
     dispose() {
       disposed = true;

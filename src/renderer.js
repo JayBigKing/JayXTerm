@@ -31,7 +31,8 @@ let theme = applyTheme("#394351");
 let fontPreferences = { ...terminalDefaults };
 let fontOptions = terminalFont(fontPreferences);
 let defaultEncoding = terminalDefaults.defaultEncoding;
-let highlightKeywords = true;
+let highlightKeywords = false;
+let quickPasswordsEnabled = false;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -48,7 +49,7 @@ function renderBackground(color) {
   theme = applyTheme(color);
   for (const tab of tabs.values()) {
     tab.term.options.theme = theme.terminal;
-    tab.highlights.setTheme(theme);
+    tab.highlights?.setTheme(theme);
   }
   terminalSearch.refreshTheme();
   api.windowTheme(color);
@@ -75,8 +76,12 @@ function renderTerminalFont(settings) {
 const settingsPanel = installSettingsPanel({ api, previewColor: renderBackground,
   previewFont: renderTerminalFont, previewKeywords: renderKeywordHighlights, onSave: updateSettings, toast });
 function renderKeywordHighlights(enabled) {
+  if (enabled === highlightKeywords) return;
   highlightKeywords = enabled;
-  for (const tab of tabs.values()) tab.highlights.setEnabled(enabled);
+  for (const tab of tabs.values()) {
+    tab.highlights?.dispose();
+    tab.highlights = enabled ? installKeywordHighlights(tab.term, theme) : null;
+  }
 }
 function showTerminal() {
   if (fileWorkspaceOpen) toggleFileWorkspace(false);
@@ -88,6 +93,16 @@ function updateSettings(settings) {
   renderBackground(settings.backgroundColor);
   renderTerminalFont(settings);
   renderKeywordHighlights(settings.highlightKeywords);
+  terminalSearch.setEnabled(settings.terminalSearchEnabled);
+  if (quickPasswordsEnabled !== settings.quickPasswordsEnabled) {
+    quickPasswordsEnabled = settings.quickPasswordsEnabled;
+    quickPasswords.setEnabled(quickPasswordsEnabled);
+    for (const tab of tabs.values()) {
+      tab.passwordPrompt?.dispose();
+      tab.passwordPrompt = quickPasswordsEnabled ? quickPasswords.watch(tab) : null;
+    }
+    if (quickPasswordsEnabled) quickPasswords.activate();
+  }
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
   fileOpen = settings.fileOpen;
@@ -508,8 +523,8 @@ function createTerminal(session, id, { moving = false } = {}) {
     files: [],
     loadVersion: 0,
   };
-  tab.highlights = installKeywordHighlights(term, theme, highlightKeywords);
-  tab.passwordPrompt = quickPasswords.watch(tab);
+  if (highlightKeywords) tab.highlights = installKeywordHighlights(term, theme);
+  if (quickPasswordsEnabled) tab.passwordPrompt = quickPasswords.watch(tab);
   term.parser.registerOscHandler(7, (value) => {
     const match = /^file:\/\/([^/]*)(\/[^\x00-\x1f]*)$/.exec(value);
     if (!match) return true;
@@ -555,7 +570,7 @@ function createTerminal(session, id, { moving = false } = {}) {
       .catch((error) => toast(error.message));
   };
   term.onData((data) => {
-    quickPasswords.userInput(tab);
+    if (quickPasswordsEnabled) quickPasswords.userInput(tab);
     if (!tab.moving) api.send({ type: "input", id, data });
   });
   term.onResize(
@@ -764,7 +779,7 @@ function fitTerminal(t) {
       cols: t.term.cols,
       rows: t.term.rows,
     });
-  t.highlights.refresh();
+  t.highlights?.refresh();
 }
 function activate(id, focus = true) {
   current = id;
@@ -816,8 +831,8 @@ function closeTab(id, disconnect = true) {
   if (disconnect) api.send({ type: "disconnect", id });
   clearCwdQuery(t);
   terminalSearch.remove(t);
-  t.highlights.dispose();
-  t.passwordPrompt.dispose();
+  t.highlights?.dispose();
+  t.passwordPrompt?.dispose();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
@@ -1422,6 +1437,10 @@ function markMoving(t, moving) {
     $("#move-tab").disabled = moving || t.state !== "已连接";
 }
 api.onWindow(async (m) => {
+  if (m.type === "passwords-changed") {
+    if (quickPasswordsEnabled) quickPasswords.refresh();
+    return;
+  }
   if (m.type === "duplicate-tab") {
     await duplicateTab(tabs.get(m.id));
     return;

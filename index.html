@@ -113,8 +113,8 @@
       <footer class="statusbar">
           <span id="status">就绪</span
           ><span
-            ><button id="terminal-passwords" type="button" aria-expanded="false" aria-controls="quick-password-picker" title="选择快捷密码填入当前终端并提交" disabled>密码本</button>
-            <button id="terminal-search-toggle" type="button" aria-expanded="false" aria-controls="terminal-search" disabled><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>搜索</button>
+            ><button id="terminal-passwords" type="button" aria-expanded="false" aria-controls="quick-password-picker" title="选择快捷密码填入当前终端并提交" hidden disabled>密码本</button>
+            <button id="terminal-search-toggle" type="button" aria-expanded="false" aria-controls="terminal-search" hidden disabled><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg>搜索</button>
             <select id="terminal-encoding" aria-label="当前终端编码" disabled>
               <option value="utf-8">UTF-8</option>
               <option value="gbk">GBK / CP936</option>
@@ -185,9 +185,10 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
               <label for="settings-default-encoding">新会话默认编码</label>
               <select id="settings-default-encoding" name="defaultEncoding"><option value="utf-8">UTF-8</option><option value="gbk">GBK / CP936</option><option value="gb2312">GB2312</option></select>
               <p class="form-note">仅影响新建会话。已有连接可在窗口底栏切换编码，也可在会话配置中更改。</p>
-              <label class="check"><input id="settings-highlight-keywords" name="highlightKeywords" type="checkbox" checked />高亮日志关键词</label>
+              <label class="check"><input id="settings-highlight-keywords" name="highlightKeywords" type="checkbox" />高亮日志关键词</label>
               <p class="form-note keyword-legend"><span class="success">Success / Passed</span><span class="error">Fail / Error</span><span class="warning">Warning / Timeout</span><span class="keyword-info">Info / Debug</span></p>
               <p class="form-note">匹配不区分大小写，支持中文成功、失败、错误、警告和超时；保留原始输出。Vim 等全屏程序使用自身配色。</p>
+              <label class="check"><input name="terminalSearchEnabled" type="checkbox" />终端搜索</label>
             </section>
             <section id="settings-files" role="tabpanel" aria-labelledby="settings-tab-files" hidden>
               <h3>文件与存储</h3>
@@ -199,11 +200,15 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
             </section>
             <section id="settings-passwords" role="tabpanel" aria-labelledby="settings-tab-passwords" hidden>
               <h3>密码</h3>
-              <div class="vault-heading"><strong>快捷密码本</strong><button id="vault-add" type="button">＋ 新增密码</button></div>
-              <p class="form-note">为密码添加描述，例如「虚拟机1」。使用此电脑的系统安全存储加密，密码修改即时保存。</p>
-              <div id="vault-list" class="vault-list" aria-label="已保存的快捷密码"></div>
-              <p id="vault-note" class="form-note" role="status"></p>
-              <p class="form-note">连接密码框可选择描述填入。检测到 Shell 密码提示时，在光标旁显示候选；↑/↓ 选择，Enter 或点选后填入并提交，Esc 关闭。</p>
+              <label class="check"><input name="quickPasswordsEnabled" type="checkbox" />启用快捷密码本和密码提示</label>
+              <p class="form-note">保存设置后生效。关闭会隐藏密码本和候选，已加密的记录会保留。</p>
+              <div id="vault-controls" hidden>
+                <div class="vault-heading"><strong>快捷密码本</strong><button id="vault-add" type="button">＋ 新增密码</button></div>
+                <p class="form-note">为密码添加描述，例如「虚拟机1」。使用此电脑的系统安全存储加密，密码修改即时保存。</p>
+                <div id="vault-list" class="vault-list" aria-label="已保存的快捷密码"></div>
+                <p id="vault-note" class="form-note" role="status"></p>
+                <p class="form-note">连接密码框可选择描述填入。检测到 Shell 密码提示时，在光标旁显示候选；↑/↓ 选择，Enter 或点选后填入并提交，Esc 关闭。</p>
+              </div>
               <hr class="settings-divider" />
               <label class="check"><input name="saveHistory" type="checkbox" />加密保存历史密码</label>
               <p class="form-note">默认关闭。关闭并保存设置会清空自动记录的历史密码。快捷密码本和各会话保存的密码独立管理。</p>
@@ -291,7 +296,7 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
             /><button type="button" id="toggle-password" aria-pressed="false">
               显示
             </button>
-            <button type="button" id="session-quick-password" class="password-book-button" title="选择快捷密码">密码本</button>
+            <button type="button" id="session-quick-password" class="password-book-button" title="选择快捷密码" hidden>密码本</button>
           </div></label
         ><label
           >历史密码<select id="session-password-history" aria-label="历史密码" disabled>
@@ -330,7 +335,7 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
         <div class="password-field">
           <input id="connect-password" type="password" placeholder="输入连接密码" required autocomplete="off" />
           <button type="button" id="toggle-connect-password" aria-pressed="false">显示</button>
-          <button type="button" id="connect-quick-password" class="password-book-button" title="选择快捷密码">密码本</button>
+          <button type="button" id="connect-quick-password" class="password-book-button" title="选择快捷密码" hidden>密码本</button>
         </div>
         <label>历史密码<select id="connect-password-history" aria-label="历史密码" disabled>
           <option value="">无密码记录</option>
