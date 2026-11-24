@@ -70,8 +70,9 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(initial.highlightKeywords, false);
   assert.equal(initial.terminalSearchEnabled, false);
   assert.equal(initial.quickPasswordsEnabled, false);
+  assert.equal(initial.predictiveEcho, true);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
-  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: true, terminalSearchEnabled: true, quickPasswordsEnabled: true });
+  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: true, terminalSearchEnabled: true, quickPasswordsEnabled: true, predictiveEcho: false });
   const reloaded = open();
   assert.equal(reloaded.describe().fontFamily, "Consolas");
   assert.equal(reloaded.describe().cjkFontFamily, "Microsoft YaHei");
@@ -84,11 +85,12 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(open().describe().highlightKeywords, true);
   assert.equal(open().describe().terminalSearchEnabled, true);
   assert.equal(open().describe().quickPasswordsEnabled, true);
+  assert.equal(open().describe().predictiveEcho, false);
   const previous = fs.readFileSync(file, "utf8");
   for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
     { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" },
     { cjkFontFamily: null }, { cjkFontFamily: "   " }, { cjkFontFamily: 'bad" font' },
-    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { terminalSearchEnabled: null }, { quickPasswordsEnabled: 1 }]) {
+    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { terminalSearchEnabled: null }, { quickPasswordsEnabled: 1 }, { predictiveEcho: "yes" }]) {
     assert.throws(() => open().apply({ ...base, ...invalid }), /终端(设置|功能开关)/);
     assert.equal(fs.readFileSync(file, "utf8"), previous);
   }

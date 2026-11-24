@@ -6,6 +6,7 @@ export const terminalDefaults = {
   highlightKeywords: false,
   terminalSearchEnabled: false,
   quickPasswordsEnabled: false,
+  predictiveEcho: true,
 };
 export const terminalEncodings = ["utf-8", "gbk", "gb2312"];
 export const validFontFamily = (value) => typeof value === "string" && value.trim().length > 0 &&

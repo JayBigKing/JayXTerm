@@ -315,7 +315,16 @@ app.whenReady().then(async () => {
       const row=[...document.querySelectorAll('.file-row')].find(r=>r.textContent.includes('upload-tree'));
       row.querySelector('button').click();
       for(let i=0;i<80;i++){await new Promise(r=>setTimeout(r,100));if(document.querySelector('#transfer-status').textContent.startsWith('完成'))return;}
-      throw new Error('Folder download failed');
+      throw new Error('Folder download failed: '+document.querySelector('#transfer-status').textContent);
+    })()`);
+    w.webContents.send("ssh:event", {
+      type: "progress", id: await w.webContents.executeJavaScript("window.__qaConnectionId"),
+      files: 1, name: "/home/jay/upload-tree/nested/中文.txt", current: 1, total: 1,
+    });
+    await w.webContents.executeJavaScript(`(async()=>{
+      await new Promise(resolve=>setTimeout(resolve,50));
+      if(!document.querySelector('#transfer-status').textContent.startsWith('完成'))
+        throw new Error('Late progress overwrote download completion');
     })()`);
     if (
       fs.readFileSync(
@@ -337,6 +346,7 @@ app.whenReady().then(async () => {
     if (process.env.JAYXTERM_SESSION_EXCHANGE_QA === "1")
       await runCheck("session import/export", "./session-exchange-check.cjs", w);
     if (process.env.JAYXTERM_ASSIST_QA === "1") {
+      await runCheck("conservative local echo with delayed SSH", "./terminal-echo-check.cjs", w, fixture);
       await runCheck("keyword highlights, terminal search and file icons", "./terminal-assistance-check.cjs", w, fixture);
       await runCheck("quick password vault and prompt suggestions", "./quick-passwords-check.cjs", w, fixture);
     }

@@ -94,9 +94,16 @@ async function check(win, fixture) {
       if (!$('#settings-dialog').open) throw new Error('Selecting a font submitted the settings form');
       await document.fonts.ready;
       await wait(() => getComputedStyle($('.terminal-pane.active .xterm-rows')).fontFamily.includes('JayXTerm CJK'));`);
-    const previewFonts = await platformFonts(win, "#settings-font-preview");
-    assert.ok(previewFonts.some(font => font.familyName === latin), JSON.stringify(previewFonts));
-    assert.ok(previewFonts.some(font => font.familyName === chinese), JSON.stringify(previewFonts));
+    // CoreText can report a localized family name (e.g. 蘋方-簡 for PingFang
+    // SC). Compare the selected family's actual faces by PostScript name too.
+    const selectedFaces = await run(`return ${JSON.stringify([latin, chinese])}.map(family => [family,
+      window.__fontFaces.filter(face => face.family === family).map(face => face.postscriptName)]);`);
+    const assertSelectedFonts = fonts => {
+      for (const [family, faces] of selectedFaces)
+        assert.ok(fonts.some(font => font.familyName === family || faces.includes(font.postScriptName)),
+          JSON.stringify(fonts));
+    };
+    assertSelectedFonts(await platformFonts(win, "#settings-font-preview"));
     await click(win, "#settings-cjk-font-family-picker");
     press(win, "Escape");
     await run("await wait(() => !opened()); if (!$('#settings-dialog').open) throw new Error('Escape closed settings');");
@@ -142,9 +149,7 @@ async function check(win, fixture) {
       return { latin: measure('A'), cjk: measure('中'), punctuation: measure('，') };`);
     assert.ok(Math.abs(grid.cjk - grid.latin * 2) < 1.5, JSON.stringify(grid));
     assert.ok(Math.abs(grid.punctuation - grid.latin * 2) < 1.5, JSON.stringify(grid));
-    const terminalFonts = await platformFonts(win, "#font-qa-row");
-    assert.ok(terminalFonts.some(font => font.familyName === latin), JSON.stringify(terminalFonts));
-    assert.ok(terminalFonts.some(font => font.familyName === chinese), JSON.stringify(terminalFonts));
+    assertSelectedFonts(await platformFonts(win, "#font-qa-row"));
     const columns = await run("return Number($('.terminal-pane.active').dataset.cols);");
     stream.write("\x1b[2J\x1b[H" + "W".repeat(columns - 2) + "中文Z");
     const wrapped = await run(`await wait(() => $('.terminal-pane.active .xterm-rows').textContent.includes('文Z'));

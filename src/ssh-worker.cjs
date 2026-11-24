@@ -117,6 +117,8 @@ process.on("message", async (m) => {
         send({ type: "closed", id: m.id });
       });
       c.client.on("ready", () => {
+        // Interactive input must not wait for TCP's small-packet coalescing.
+        c.client.setNoDelay(true);
         if (m.test) {
           c.client.sftp((error, sftp) => {
             send({

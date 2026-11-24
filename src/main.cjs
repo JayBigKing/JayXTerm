@@ -151,6 +151,7 @@ app.whenReady().then(() => {
     ready: editorConnectionReady,
     request,
     busyTransfers,
+    remoteDrags,
   }));
   Menu.setApplicationMenu(null);
   window = workspace.create();
@@ -680,6 +681,13 @@ ipcMain.handle("sftp:relay", async (e, { id, path: directory, token }) => {
   if (!drag || drag.expires <= Date.now() || owners.get(drag.id) !== drag.owner)
     throw new Error("拖放已失效，请重新拖动文件");
   remoteDrags.delete(token);
+  drag.claimed = true;
+  if (drag.nativeDrop && (await drag.nativeDrop) !== "copy")
+    throw new Error("拖放未完成，请重新拖动文件");
+  // Ownership and readiness may have changed while the native drag finished.
+  ensureOwner(e.sender, id);
+  if (owners.get(drag.id) !== drag.owner)
+    throw new Error("源连接已移动或关闭，请重新拖动文件");
   const source = active.get(drag.id),
     target = active.get(id);
   if (

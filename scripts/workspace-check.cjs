@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { randomBytes } = require("node:crypto");
 const { execFileSync } = require("node:child_process");
 const path = require("node:path");
+const fs = require("node:fs");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(check, message) {
   for (let i = 0; i < 100; i++) {
@@ -14,9 +15,16 @@ async function waitFor(check, message) {
 }
 const js = (window, source) => window.webContents.executeJavaScript(source);
 async function check(window, source) {
+  const nativeDrag = await js(window, "window.api.localDragAvailable()");
+  const relayTarget = path.resolve(".codex-cache/qa/local-drag-relay-target");
+  const dragLog = path.resolve(".codex-cache/qa/local-drag.jsonl");
+  const previousDrags = nativeDrag && fs.existsSync(dragLog)
+    ? fs.readFileSync(dragLog, "utf8").trim().split("\n").length : 0;
+  if (nativeDrag) fs.writeFileSync(relayTarget, "relay");
   const target = createFixture();
   const large = randomBytes(1024 * 1024 + 13);
-  source.files.set("/home/jay/测试 relay.bin", large);
+  source.files.set("/home/jay/测试 relay:latest.bin", large);
+  source.files.set("/home/jay/upload-tree/nested/remote:only.txt", Buffer.from("POSIX name"));
   await new Promise((resolve) => target.server.listen(0, "127.0.0.1", resolve));
   let other;
   try {
@@ -67,14 +75,14 @@ async function check(window, source) {
       () =>
         js(
           window,
-          `document.querySelector('#file-list').textContent.includes('测试 relay.bin')`,
+          `document.querySelector('#file-list').textContent.includes('测试 relay:latest.bin')`,
         ),
       "Source file did not load",
     );
     const token = await js(
       window,
       `(() => {
-      const row=[...document.querySelectorAll('#file-list .file-row')].find(r=>r.textContent.includes('测试 relay.bin'));
+      const row=[...document.querySelectorAll('#file-list .file-row')].find(r=>r.textContent.includes('测试 relay:latest.bin'));
       const data=new DataTransfer();
       row.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:data}));
       return data.getData('text/plain');
@@ -98,15 +106,20 @@ async function check(window, source) {
       "Cross-window file transfer failed",
     );
     assert.deepEqual(
-      target.files.get("/home/jay/projects/测试 relay.bin"),
+      target.files.get("/home/jay/projects/测试 relay:latest.bin"),
       large,
     );
+    if (nativeDrag) {
+      const result = JSON.parse(fs.readFileSync(dragLog, "utf8").trim().split("\n").at(-1));
+      assert.equal(result.relayText, token, "The native helper lost the internal relay token");
+      assert.deepEqual(result.files, [], "An internal drop must not download virtual file contents first");
+    }
     await js(window, `(() => {
       const button = document.querySelector('#file-workspace-toggle');
       button.click();
       if (document.querySelector('#terminal-area').dataset.count !== '1' ||
           document.querySelectorAll('.terminal-group .workspace-files').length !== 1 ||
-          !document.querySelector('.workspace-files .file-list').textContent.includes('测试 relay.bin'))
+          !document.querySelector('.workspace-files .file-list').textContent.includes('测试 relay:latest.bin'))
         throw new Error('Single-pane file space did not reuse the current session');
       button.click();
     })()`);
@@ -247,6 +260,7 @@ async function check(window, source) {
       "directory UI round trip",
     );
     assert.ok(target.dirs.has("/home/jay/projects/upload-tree/nested/empty"));
+    assert.equal(target.files.get("/home/jay/projects/upload-tree/nested/remote:only.txt")?.toString(), "POSIX name");
     await js(window, `document.querySelector('.terminal-group:last-child .workspace-files [data-directory="/home/jay/projects"]').dispatchEvent(new MouseEvent('dblclick',{bubbles:true}))`);
     await waitFor(
       () => js(window, `document.querySelector('.terminal-group:last-child .workspace-files input').value === '/home/jay/projects'`),
@@ -354,10 +368,21 @@ async function check(window, source) {
       authCount,
       "Merging a pane must not reconnect",
     );
+    if (nativeDrag) {
+      const results = fs.readFileSync(dragLog, "utf8").trim().split("\n").map(JSON.parse).slice(previousDrags);
+      assert.equal(results.length, 2, "Both file and directory rows must use native drag");
+      for (const result of results) {
+        assert.equal(result.status, "copy");
+        assert.match(result.relayText, /^jayxterm-sftp:[\da-f-]+$/);
+        assert.deepEqual(result.entries, []);
+        assert.deepEqual(result.files, []);
+      }
+    }
     console.log(
       "PASS: one to four shared terminal/file layouts, tab moves, split directory transfer and cross-window binary file transfer",
     );
   } finally {
+    fs.rmSync(relayTarget, { force: true });
     if (other && !other.isDestroyed()) other.destroy();
     target.close();
   }

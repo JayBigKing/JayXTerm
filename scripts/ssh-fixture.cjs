@@ -7,6 +7,7 @@ function createFixture({ readline = false } = {}) {
     streams = new Set();
   const directory = { path: null, queries: 0 };
   const inputRecords = [];
+  const echo = { delay: 0, enabled: true, transform: null };
   let authenticated = 0;
   const files = new Map([
       ["/home/jay/README.md", Buffer.from("JayXTerm SFTP fixture\n")],
@@ -108,7 +109,12 @@ function createFixture({ readline = false } = {}) {
             stream.write(
               "\x1b[32mWelcome to JayXTerm\x1b[0m\r\nUbuntu 24.04 LTS · Internal Development Server\r\n\r\njay@dev-server:~$ ",
             );
-            stream.on("data", (d) => stream.write(d));
+            stream.on("data", (d) => {
+              if (!echo.enabled) return;
+              const output = echo.transform ? echo.transform(d) : d;
+              if (echo.delay) setTimeout(() => { if (!stream.destroyed) stream.write(output); }, echo.delay);
+              else stream.write(output);
+            });
           });
           session.on("sftp", (accept) => {
             const s = accept();
@@ -242,6 +248,7 @@ function createFixture({ readline = false } = {}) {
     sizes,
     inputs,
     inputRecords,
+    echo,
     streams,
     directory,
     get authenticated() {

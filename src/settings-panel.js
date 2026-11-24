@@ -2,7 +2,7 @@ import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
 import { installFontPicker } from "./font-picker.js";
 
 // Add sections in the markup and fields here; loading/saving and navigation stay shared.
-const fields = ["backgroundColor", "fontFamily", "cjkFontFamily", "fontSize", "defaultEncoding", "highlightKeywords", "terminalSearchEnabled", "quickPasswordsEnabled", "fileOpen", "saveHistory"];
+const fields = ["backgroundColor", "fontFamily", "cjkFontFamily", "fontSize", "defaultEncoding", "highlightKeywords", "terminalSearchEnabled", "quickPasswordsEnabled", "predictiveEcho", "fileOpen", "saveHistory"];
 export function installSettingsPanel({ api, previewColor, previewFont, previewKeywords, onSave, toast }) {
   const $ = (selector) => document.querySelector(selector);
   const dialog = $("#settings-dialog"), form = $("#settings-form");

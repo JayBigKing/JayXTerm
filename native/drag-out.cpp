@@ -23,6 +23,12 @@ const CLIPFORMAT preferredEffect = RegisterClipboardFormatW(L"Preferred DropEffe
 const CLIPFORMAT inDragLoop = RegisterClipboardFormatW(L"InShellDragLoop");
 const CLIPFORMAT performedEffect = RegisterClipboardFormatW(L"Performed DropEffect");
 const CLIPFORMAT logicalEffect = RegisterClipboardFormatW(L"Logical Performed DropEffect");
+// This drag originates in our renderer. Chromium must use the relay token when
+// it receives it, rather than materializing the Shell's virtual files first.
+// These are the same conservative markers used by Chromium's Windows provider.
+// See OSExchangeDataProviderWin and WebContentsViewAura::ShouldIncludeVirtualFiles.
+const CLIPFORMAT rendererTaint = RegisterClipboardFormatW(L"chromium/x-renderer-taint");
+const CLIPFORMAT ignoreFileContents = RegisterClipboardFormatW(L"chromium/x-ignore-file-contents");
 constexpr uint64_t maxGlobalFile = 4 * 1024 * 1024;
 // IDataObjectAsyncCapability, also called IAsyncOperation by older SDKs.
 const IID asyncCapabilityId = {0x3d8b0590, 0xf691, 0x11d2, {0x8e, 0xa9, 0x00, 0x60, 0x97, 0xdf, 0x5b, 0xd4}};
@@ -66,6 +72,7 @@ struct Entry {
 
 struct DragState {
   std::string token;
+  std::wstring relayText;
   std::vector<Entry> entries;
   std::map<size_t, std::wstring> staged;
   bool manifestLoaded = false;
@@ -319,6 +326,10 @@ public:
     *medium = {};
     const HRESULT accepted = QueryGetData(format);
     if (FAILED(accepted)) return accepted;
+    if (format->cfFormat == CF_UNICODETEXT)
+      return renderGlobal(medium, state->relayText.c_str(), (state->relayText.size() + 1) * sizeof(wchar_t));
+    if (format->cfFormat == rendererTaint || format->cfFormat == ignoreFileContents)
+      return renderGlobal(medium, nullptr, 0);
     if (format->cfFormat == descriptors) return renderDescriptors(medium);
     if (format->cfFormat == preferredEffect || format->cfFormat == inDragLoop) {
       const DWORD value = format->cfFormat == preferredEffect ? DROPEFFECT_COPY : !state->dropped;
@@ -340,6 +351,11 @@ public:
   HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC *, STGMEDIUM *) override { return E_NOTIMPL; }
   HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC *format) override {
     if (format->dwAspect != DVASPECT_CONTENT) return DV_E_DVASPECT;
+    if (format->cfFormat == CF_UNICODETEXT || format->cfFormat == rendererTaint ||
+        format->cfFormat == ignoreFileContents) {
+      if (state->relayText.empty()) return DV_E_FORMATETC;
+      return format->tymed & TYMED_HGLOBAL ? S_OK : DV_E_TYMED;
+    }
     if (format->cfFormat == descriptors || format->cfFormat == preferredEffect ||
         format->cfFormat == inDragLoop || properties.count(format->cfFormat))
       return format->tymed & TYMED_HGLOBAL ? S_OK : DV_E_TYMED;
@@ -363,7 +379,8 @@ public:
     if (format->dwAspect != DVASPECT_CONTENT) return DV_E_DVASPECT;
     if (medium->tymed != TYMED_HGLOBAL || !(format->tymed & TYMED_HGLOBAL)) return DV_E_TYMED;
     if (format->cfFormat < 0xc000 || format->cfFormat == descriptors || format->cfFormat == contents ||
-        format->cfFormat == preferredEffect || format->cfFormat == inDragLoop) return DV_E_FORMATETC;
+        format->cfFormat == preferredEffect || format->cfFormat == inDragLoop ||
+        format->cfFormat == rendererTaint || format->cfFormat == ignoreFileContents) return DV_E_FORMATETC;
     const size_t size = GlobalSize(medium->hGlobal);
     if (!size || size > maxGlobalFile ||
         (properties.size() >= 16 && !properties.count(format->cfFormat))) return E_INVALIDARG;
@@ -376,12 +393,20 @@ public:
   }
   HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD direction, IEnumFORMATETC **result) override {
     if (direction != DATADIR_GET) return E_NOTIMPL;
-    if (!state->loadManifest()) return STG_E_READFAULT;
     std::vector<FORMATETC> formats = {
       { descriptors, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
       { preferredEffect, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
       { inDragLoop, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
     };
+    if (!state->relayText.empty()) {
+      formats.push_back({ CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL });
+      formats.push_back({ rendererTaint, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL });
+      formats.push_back({ ignoreFileContents, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL });
+    }
+    // Enumerating supported formats must not scan the remote tree. A target
+    // requests the descriptors before retrieving contents at a concrete index.
+    if (!state->manifestLoaded)
+      formats.push_back({ contents, nullptr, DVASPECT_CONTENT, -1, TYMED_ISTREAM | TYMED_HGLOBAL });
     for (size_t i = 0; i < state->entries.size(); ++i) {
       if (state->entries[i].directory) continue;
       DWORD media = TYMED_ISTREAM;
@@ -459,17 +484,33 @@ void pumpUntilFinished(DragObject *object, DragState &state) {
   }
 }
 
-void drag(const std::string &token) {
+void drag(const std::string &token, const std::wstring &relayText) {
   if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
     std::cout << "done\t" << token << "\treleased" << std::endl;
     return;
   }
   auto state = std::make_shared<DragState>();
   state->token = token;
+  state->relayText = relayText;
   auto *object = new DragObject(state);
   auto *source = new DropSource(state);
   DWORD effect = DROPEFFECT_NONE;
+  // The helper has no window of its own. OLE's drag loop otherwise waits on
+  // an input queue that never receives the renderer's mouse-up/Escape events.
+  // Join the foreground source queue only for the synchronous gesture, then
+  // detach before servicing the Shell's asynchronous file reads.
+  const DWORD ownThread = GetCurrentThreadId();
+  const DWORD sourceThread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+  const bool attached = sourceThread && sourceThread != ownThread &&
+    AttachThreadInput(ownThread, sourceThread, TRUE);
+  if (!sourceThread || (sourceThread != ownThread && !attached)) {
+    object->Release();
+    source->Release();
+    std::cout << "done\t" << token << "\tfailed" << std::endl;
+    return;
+  }
   const HRESULT result = SHDoDragDrop(nullptr, object, source, DROPEFFECT_COPY, &effect);
+  if (attached) AttachThreadInput(ownThread, sourceThread, FALSE);
   if (result == DRAGDROP_S_DROP) pumpUntilFinished(object, *state);
   effect = object->reportedEffect(effect);
   object->Release();
@@ -486,6 +527,30 @@ bool checkDataObject() {
   const DWORD length = GetFullPathNameW(L"drop-test.bin", MAX_PATH, file, nullptr);
   if (!length || length >= MAX_PATH) return false;
   auto state = std::make_shared<DragState>();
+  const std::wstring relayText = L"jayxterm-sftp:test-token";
+  state->relayText = relayText;
+  // Reading the relay formats must not need a manifest or file download.
+  DragObject relayObject(state);
+  FORMATETC text{CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+  STGMEDIUM textMedium{};
+  if (FAILED(relayObject.GetData(&text, &textMedium))) return false;
+  const auto *textBytes = static_cast<const wchar_t *>(GlobalLock(textMedium.hGlobal));
+  const bool textOk = textBytes && relayText == textBytes;
+  if (textBytes) GlobalUnlock(textMedium.hGlobal);
+  ReleaseStgMedium(&textMedium);
+  if (!textOk || state->manifestLoaded || !state->staged.empty()) return false;
+  for (auto marker : {rendererTaint, ignoreFileContents}) {
+    FORMATETC format{marker, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    if (FAILED(relayObject.GetData(&format, &textMedium))) return false;
+    ReleaseStgMedium(&textMedium);
+  }
+  IEnumFORMATETC *pendingFormats = nullptr;
+  if (FAILED(relayObject.EnumFormatEtc(DATADIR_GET, &pendingFormats))) return false;
+  pendingFormats->Release();
+  if (state->manifestLoaded || !state->staged.empty()) return false;
+  auto externalState = std::make_shared<DragState>();
+  DragObject externalObject(externalState);
+  if (externalObject.QueryGetData(&text) != DV_E_FORMATETC) return false;
   state->entries = {{L"sample", true, 0}, {L"sample\\file.bin", false, sizeof(expected)},
                     {L"sample\\large.bin", false, maxGlobalFile + 1}};
   state->manifestLoaded = true;
@@ -505,12 +570,15 @@ bool checkDataObject() {
   if (FAILED(object.EnumFormatEtc(DATADIR_GET, &listed))) return false;
   FORMATETC format{};
   DWORD smallMedia = 0, largeMedia = 0;
+  unsigned relayFormats = 0;
   while (listed->Next(1, &format, nullptr) == S_OK) {
     if (format.cfFormat == contents && format.lindex == 1) smallMedia = format.tymed;
     if (format.cfFormat == contents && format.lindex == 2) largeMedia = format.tymed;
+    if ((format.cfFormat == CF_UNICODETEXT || format.cfFormat == rendererTaint ||
+         format.cfFormat == ignoreFileContents) && format.tymed == TYMED_HGLOBAL) ++relayFormats;
   }
   listed->Release();
-  if (smallMedia != (TYMED_ISTREAM | TYMED_HGLOBAL) || largeMedia != TYMED_ISTREAM) return false;
+  if (relayFormats != 3 || smallMedia != (TYMED_ISTREAM | TYMED_HGLOBAL) || largeMedia != TYMED_ISTREAM) return false;
   FORMATETC content{contents, nullptr, DVASPECT_CONTENT, 1, TYMED_HGLOBAL};
   if (object.GetData(&content, &medium) != E_PENDING) return false;
   state->dropped = true;
@@ -542,7 +610,8 @@ int main(int argc, char **argv) {
   std::cout << "ready" << std::endl;
   for (std::string line; std::getline(std::cin, line);) {
     const auto command = fields(line);
-    if (command.size() == 2 && command[0] == "drag") drag(command[1]);
+    if ((command.size() == 2 || command.size() == 3) && command[0] == "drag")
+      drag(command[1], command.size() == 3 ? wide(command[2]) : std::wstring());
   }
   OleUninitialize();
   return 0;

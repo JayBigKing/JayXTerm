@@ -189,6 +189,8 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
               <p class="form-note keyword-legend"><span class="success">Success / Passed</span><span class="error">Fail / Error</span><span class="warning">Warning / Timeout</span><span class="keyword-info">Info / Debug</span></p>
               <p class="form-note">匹配不区分大小写，支持中文成功、失败、错误、警告和超时；保留原始输出。Vim 等全屏程序使用自身配色。</p>
               <label class="check"><input name="terminalSearchEnabled" type="checkbox" />终端搜索</label>
+              <label class="check"><input id="settings-predictive-echo" name="predictiveEcho" type="checkbox" checked />预测输入回显</label>
+              <p class="form-note">网络较慢时提前显示已确认回显的普通英文命令输入；密码、中文输入和全屏程序保持远端回显。</p>
             </section>
             <section id="settings-files" role="tabpanel" aria-labelledby="settings-tab-files" hidden>
               <h3>文件与存储</h3>
