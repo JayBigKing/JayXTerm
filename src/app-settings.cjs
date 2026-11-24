@@ -76,6 +76,34 @@ function prepareCache(destination, source) {
     if (!keepBackup) fs.rmSync(staging, { recursive: true, force: true });
   }
 }
+function readLocalState(file) {
+  try {
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    return state && typeof state === "object" && !Array.isArray(state) ? state : null;
+  } catch (error) {
+    return error.code === "ENOENT" ? {} : null;
+  }
+}
+function restoreLegacyWindowsKey(defaultCache, legacyCache) {
+  const defaultFile = path.join(defaultCache, "Local State");
+  const state = readLocalState(defaultFile);
+  if (!state || Object.hasOwn(state.os_crypt ?? {}, "encrypted_key")) return;
+  const encryptedKey = readLocalState(path.join(legacyCache, "Local State"))?.os_crypt?.encrypted_key;
+  // Chromium stores the AES key in a DPAPI envelope. Preserve it as-is.
+  if (typeof encryptedKey !== "string") return;
+  const envelope = Buffer.from(encryptedKey, "base64");
+  if (envelope.length <= 5 || envelope.toString("ascii", 0, 5) !== "DPAPI") return;
+  fs.mkdirSync(defaultCache, { recursive: true });
+  const staging = path.join(defaultCache, ".jayxterm-local-state-" + randomUUID());
+  try {
+    fs.writeFileSync(staging, JSON.stringify({
+      ...state, os_crypt: { ...state.os_crypt, encrypted_key: encryptedKey },
+    }), { mode: 0o600, flag: "wx" });
+    fs.renameSync(staging, defaultFile);
+  } finally {
+    fs.rmSync(staging, { force: true });
+  }
+}
 function mask(secret) {
   const chars = Array.from(secret);
   if (chars.length <= 6) return "*".repeat(Math.max(3, chars.length));
@@ -125,8 +153,15 @@ function openAppSettings(file, defaultCache, safeStorage) {
     return index;
   }
   return {
-    initializeCache() {
+    initializeCache({ restoreWindowsKey = false } = {}) {
       const data = settings();
+      if (restoreWindowsKey && data.cachePath) {
+        try {
+          restoreLegacyWindowsKey(defaultCache, data.cachePath);
+        } catch {
+          console.error("JayXTerm could not restore the Windows encryption key from the old cache directory.");
+        }
+      }
       if (data.pendingCache) {
         const { path: next, migrate } = data.pendingCache;
         try {

@@ -28,6 +28,7 @@ function installEditorWindows({ ensureOwner, request, connected, didSave, backgr
       title: `${file.name} · ${file.server} · JayXTerm`,
       webPreferences: {
         preload: path.join(__dirname, "editor-preload.cjs"),
+        session: parent.webContents.session,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,

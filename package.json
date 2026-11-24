@@ -1,6 +1,6 @@
 {
   "name": "jayxterm",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "A focused SSH and SFTP desktop client",
   "private": true,
   "author": "JayXTerm contributors",
@@ -16,7 +16,9 @@
     "dev": "npm run build && electron .",
     "test": "node --test src/*.test.cjs",
     "build:drag": "node scripts/build-drag-out.cjs",
-    "dist:win": "npm run build && npm run build:drag && electron-builder --win --x64"
+    "dist:win": "npm run build && npm run build:drag && electron-builder --win --x64",
+    "build:finder-drag": "node scripts/build-finder-drag.cjs",
+    "dist:mac": "npm run build && npm run build:finder-drag && electron-builder --mac dmg"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
@@ -53,6 +55,7 @@
       "src/theme.mjs",
       "src/terminal-settings.mjs",
       "src/local-drag.cjs",
+      "src/finder-drag.cjs",
       "src/transfers.cjs",
       ".codex-cache/build/renderer/**/*",
       "assets/jayxterm.png",
@@ -64,6 +67,15 @@
       "src/codec.cjs",
       "src/windows.cjs"
     ],
+    "mac": {
+      "icon": "assets/jayxterm.png",
+      "extraResources": [
+        {
+          "from": ".codex-cache/build/native/jayxterm-finder-drag.node",
+          "to": "jayxterm-finder-drag.node"
+        }
+      ]
+    },
     "win": {
       "icon": "assets/jayxterm.ico",
       "extraResources": [

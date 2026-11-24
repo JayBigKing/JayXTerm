@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld("api", {
   localDragAvailable: () => ipcRenderer.invoke("local-drag:available"),
   warmLocalDrag: () => ipcRenderer.send("local-drag:warm"),
   startLocalDrag: (s) => ipcRenderer.send("local-drag:start", s),
+  armFinderDrag: (s) => ipcRenderer.send("finder-drag:arm", s),
   openRemoteEditor: (s) => ipcRenderer.invoke("editor:open", s),
   drop: (s, files) =>
     ipcRenderer.invoke("sftp:drop", {

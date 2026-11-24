@@ -12,6 +12,7 @@ function createWindows({
   onDisconnect,
   isBusy,
   background,
+  browserSession,
 }) {
   const windows = new Map(),
     moves = new Set(),
@@ -108,6 +109,7 @@ function createWindows({
       }),
       webPreferences: {
         preload: path.join(__dirname, "preload.cjs"),
+        ...(browserSession && { session: browserSession }),
         nodeIntegration: false,
         contextIsolation: true,
         sandbox: true,

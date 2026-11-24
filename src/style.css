@@ -474,6 +474,7 @@ h1 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.file-row.finder-draggable { user-select: none; }
 .file-row small {
   font-size: 9px;
   color: var(--page-muted);

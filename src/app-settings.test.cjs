@@ -128,3 +128,53 @@ test("cache changes apply on restart and migrate cache folders without copying t
   restarted.apply({ cachePath: "", migrate: false, saveHistory: false, fileOpen: "double" });
   assert.equal(open().initializeCache(), profile);
 });
+
+test("Windows cache switches leave the original DPAPI key and saved session data in the fixed profile", (t) => {
+  const { root, profile, open } = setup(t);
+  const legacyCache = path.join(root, "legacy-cache");
+  const nextCache = path.join(root, "next-cache");
+  const originalState = JSON.stringify({
+    os_crypt: { encrypted_key: Buffer.from("DPAPI-original").toString("base64") },
+    other_preference: true,
+  });
+  const otherState = JSON.stringify({
+    os_crypt: { encrypted_key: Buffer.from("DPAPI-other").toString("base64") },
+  });
+  const settings = open();
+  const input = { saveHistory: false, fileOpen: "double" };
+  settings.apply({ ...input, cachePath: legacyCache });
+  open().initializeCache();
+  fs.writeFileSync(path.join(profile, "Local State"), originalState);
+  fs.writeFileSync(path.join(legacyCache, "Local State"), otherState);
+  fs.writeFileSync(path.join(profile, "sessions.json"), '{"sessions":[{"password":"saved-ciphertext"}]}');
+
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), legacyCache);
+  open().apply({ ...input, cachePath: nextCache, migrate: false });
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), nextCache);
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), nextCache);
+  assert.equal(fs.readFileSync(path.join(profile, "Local State"), "utf8"), originalState);
+  assert.equal(fs.readFileSync(path.join(legacyCache, "Local State"), "utf8"), otherState);
+  assert.equal(fs.existsSync(path.join(nextCache, "Local State")), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, "sessions.json"))).sessions[0].password, "saved-ciphertext");
+});
+
+test("Windows recovers a key stored only in the last active custom cache", (t) => {
+  const { root, profile, open } = setup(t);
+  const legacyCache = path.join(root, "custom");
+  const input = { saveHistory: false, fileOpen: "double" };
+  open().apply({ ...input, cachePath: legacyCache });
+  open().initializeCache();
+  const key = Buffer.from("DPAPI-legacy").toString("base64");
+  const legacyState = JSON.stringify({ os_crypt: { encrypted_key: key }, other_cache_data: true });
+  fs.writeFileSync(path.join(legacyCache, "Local State"), legacyState);
+  const defaultFile = path.join(profile, "Local State");
+  fs.writeFileSync(defaultFile, JSON.stringify({ fixed_preference: true }));
+
+  open().apply({ ...input, cachePath: "", migrate: false });
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), profile);
+  assert.deepEqual(JSON.parse(fs.readFileSync(defaultFile, "utf8")), {
+    fixed_preference: true,
+    os_crypt: { encrypted_key: key },
+  });
+  assert.equal(fs.readFileSync(path.join(legacyCache, "Local State"), "utf8"), legacyState);
+});

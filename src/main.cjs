@@ -6,6 +6,7 @@ const {
   dialog,
   Menu,
   clipboard,
+  session,
 } = require("electron");
 const { createWindows } = require("./windows.cjs");
 const { normalizeEncoding } = require("./codec.cjs");
@@ -59,23 +60,32 @@ function ensureOwner(sender, id) {
 const hasInstanceLock =
   process.env.JAYXTERM_QA || app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
+const defaultCache = app.getPath("sessionData");
 const appSettings = hasInstanceLock && openAppSettings(
   path.join(app.getPath("userData"), "settings.json"),
-  app.getPath("sessionData"),
+  defaultCache,
   safeStorage,
 );
-if (appSettings) app.setPath("sessionData", appSettings.initializeCache());
+// Electron reads its Windows safeStorage key from sessionData/Local State
+// before ready. Keep that path fixed and route only the windows' session.
+const windowCache = appSettings && appSettings.initializeCache({ restoreWindowsKey: process.platform === "win32" });
 let passwordVault;
 const active = new Map(),
   requests = new Map();
 const pendingPasswords = new Map();
 const tests = new Map();
 const remoteDrags = new Map();
+function decryptSessionPassword(encrypted) {
+  if (!encrypted) return "";
+  try {
+    return safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+  } catch {
+    throw new Error("无法读取已保存的密码。请编辑会话，重新输入并保存密码。");
+  }
+}
 function storedPassword(id) {
   const s = store.get().sessions.find((s) => s.id === id);
-  return s?.password
-    ? safeStorage.decryptString(Buffer.from(s.password, "base64"))
-    : "";
+  return decryptSessionPassword(s?.password);
 }
 function finishTest(id, error, result) {
   const t = tests.get(id);
@@ -124,6 +134,7 @@ app.whenReady().then(() => {
     send,
     request,
     background: () => appSettings.describe().backgroundColor,
+    browserSession: windowCache === defaultCache ? undefined : session.fromPath(windowCache),
     isBusy: (id) => busyTransfers.has(id),
     onDisconnect: (id) => {
       active.delete(id);
@@ -143,16 +154,30 @@ app.whenReady().then(() => {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       }
     : process.platform === "win32" && existsSync(nativeDrag) ? { file: nativeDrag } : null;
-  app.once("will-quit", installLocalDrag({
-    ipcMain,
-    helper: dragHelper,
-    tempRoot: path.join(app.getPath("userData"), "drag-out"),
-    ensureOwner,
-    ready: editorConnectionReady,
-    request,
-    busyTransfers,
-    remoteDrags,
-  }));
+  if (process.platform === "darwin" && !dragHelper) {
+    const binding = app.isPackaged
+      ? path.join(process.resourcesPath, "jayxterm-finder-drag.node")
+      : path.join(__dirname, "../.codex-cache/build/native/jayxterm-finder-drag.node");
+    let native, loadError;
+    try { native = require(binding); }
+    catch (error) { loadError = error; }
+    require("./finder-drag.cjs").installFinderDrag({
+      ipcMain, native, loadError, windowFor: (sender) => BrowserWindow.fromWebContents(sender),
+      logFile: path.join(app.getPath("userData"), "finder-drag-last.json"),
+      ensureOwner, ready: editorConnectionReady, request, busyTransfers, createRemoteDrag, remoteDrags,
+    });
+  } else {
+    app.once("will-quit", installLocalDrag({
+      ipcMain,
+      helper: dragHelper,
+      tempRoot: path.join(app.getPath("userData"), "drag-out"),
+      ensureOwner,
+      ready: editorConnectionReady,
+      request,
+      busyTransfers,
+      remoteDrags,
+    }));
+  }
   Menu.setApplicationMenu(null);
   window = workspace.create();
   worker.on("message", async (m) => {
@@ -497,11 +522,7 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows }) => {
   const s = store.get().sessions.find((s) => s.id === sessionId);
   if (!s) throw new Error("会话不存在");
   const id = randomUUID();
-  const secret =
-    password ||
-    (s.password
-      ? safeStorage.decryptString(Buffer.from(s.password, "base64"))
-      : "");
+  const secret = password || decryptSessionPassword(s.password);
   active.set(id, s);
   owners.set(id, e.sender.id);
   states.set(id, "connecting");
@@ -648,19 +669,16 @@ async function uploadPaths(id, remote, paths) {
   return { files, bytes, skipped };
 }
 // Only the window owning the source connection can create a drag token.
-ipcMain.on("sftp:drag-token", (e, { id, path: remote }) => {
+function createRemoteDrag(sender, id, remote) {
   if (
-    owners.get(id) !== e.sender.id ||
+    owners.get(id) !== sender.id ||
     states.get(id) !== "ready" ||
     workspace.moves.has(id) ||
     typeof remote !== "string" ||
     !remote.startsWith("/") ||
     remote.includes("\0") ||
     remote === "/"
-  ) {
-    e.returnValue = "";
-    return;
-  }
+  ) return "";
   const now = Date.now();
   for (const [token, drag] of remoteDrags)
     if (drag.expires <= now) remoteDrags.delete(token);
@@ -670,10 +688,13 @@ ipcMain.on("sftp:drag-token", (e, { id, path: remote }) => {
   remoteDrags.set(token, {
     id,
     remote,
-    owner: e.sender.id,
+    owner: sender.id,
     expires: now + 120000,
   });
-  e.returnValue = token;
+  return token;
+}
+ipcMain.on("sftp:drag-token", (e, { id, path: remote }) => {
+  e.returnValue = createRemoteDrag(e.sender, id, remote);
 });
 ipcMain.handle("sftp:relay", async (e, { id, path: directory, token }) => {
   ensureOwner(e.sender, id);

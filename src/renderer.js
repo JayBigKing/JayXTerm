@@ -924,7 +924,7 @@ function renderSidebarFiles(tab) {
     (fileOpen === "single" ? "拖入上传 · 单击文件编辑" : "拖入上传 · 双击文件编辑");
 }
 function warmLocalDrag() {
-  if (!localDragAvailable || localDragWarmed) return;
+  if (localDragAvailable !== true || localDragWarmed) return;
   localDragWarmed = true;
   api.warmLocalDrag();
 }
@@ -950,11 +950,18 @@ function renderFiles(t, list) {
     row.setAttribute("role", "button");
     let localGesture = false;
     if (!f.symlink) {
-      row.draggable = true;
+      const finder = localDragAvailable === "finder";
+      row.draggable = !finder;
+      if (finder) row.classList.add("finder-draggable");
       row.onpointerenter = warmLocalDrag;
-      row.onpointerdown = () => { localGesture = false; };
+      row.onpointerdown = (event) => {
+        localGesture = false;
+        if (finder && event.isTrusted && event.pointerType === "mouse" && event.button === 0 &&
+            !event.target.closest("button") && !t.localDragging && canDragRemote(t))
+          api.armFinderDrag({ id: t.id, path: remoteJoin(t.path, f.name), directory: f.directory });
+      };
       row.ondragstart = (event) => {
-        if (localGesture) event.preventDefault();
+        if (localGesture || (finder && event.isTrusted)) event.preventDefault();
         else localGesture = startRemoteDrag(event, t.id, remoteJoin(t.path, f.name)) === true;
       };
     }
@@ -963,7 +970,9 @@ function renderFiles(t, list) {
       ? gesture + "进入目录；右侧 ↓ 下载整个目录"
       : f.symlink ? "双击下载文件" : gesture + "编辑；右侧 ↓ 下载文件";
     if (localDragAvailable && !f.symlink)
-      row.title += "；拖动可复制到 Windows 桌面、文件夹或其他 SSH 面板";
+      row.title += localDragAvailable === "finder"
+        ? "；拖动可复制到 Finder 或其他 SSH 面板"
+        : "；拖动可复制到 Windows 桌面、文件夹或其他 SSH 面板";
     if (f.directory) row.dataset.directory = remoteJoin(t.path, f.name);
     row.append(
       fileIcon(f),
@@ -988,7 +997,7 @@ function renderFiles(t, list) {
       deleteRemote(t, remoteJoin(t.path, f.name));
     };
     row.append(remove);
-    if (localDragAvailable && !f.symlink) {
+    if (localDragAvailable === true && !f.symlink) {
       const grip = el("button", "local-drag", "↗");
       grip.type = "button";
       grip.tabIndex = -1;
@@ -1148,17 +1157,12 @@ async function transfer(
   }
 }
 const remoteTokenPrefix = "jayxterm-sftp:";
+function canDragRemote(tab) {
+  return tab?.state === "已连接" &&
+    !tab.moving && !tab.loading && !tab.removing && !tab.transferring;
+}
 function startRemoteDrag(event, id, path) {
-  const tab = tabs.get(id);
-  if (
-    !tab ||
-    tab.moving ||
-    tab.loading ||
-    tab.removing ||
-    tab.transferring ||
-    tab.state !== "已连接" ||
-    event.target.closest("button")
-  ) {
+  if (!canDragRemote(tabs.get(id)) || event.target.closest("button")) {
     event.preventDefault();
     return;
   }
@@ -1169,8 +1173,8 @@ function startRemoteDrag(event, id, path) {
   }
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData(remoteDragType, token);
-  event.dataTransfer.setData("text/plain", remoteTokenPrefix + token);
-  if (localDragAvailable) {
+  if (localDragAvailable === true) {
+    event.dataTransfer.setData("text/plain", remoteTokenPrefix + token);
     // Cancel Chromium's text-only drag before the helper takes over. The native
     // data object carries this same token for drops back into an SSH panel.
     event.preventDefault();
