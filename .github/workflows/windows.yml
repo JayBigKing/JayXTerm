@@ -1,25 +1,31 @@
-name: Windows build
+name: JayXTerm CI and Release
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
+    branches: [main, master, jay_version]
   pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'jayxterm-release' || format('jayxterm-ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
+          package-manager-cache: false
       - name: Install
-        shell: pwsh
         run: ./scripts/windows.ps1 install
       - name: SSH and storage tests
-        shell: pwsh
         run: ./scripts/windows.ps1 test
       - name: Windows application smoke test
-        shell: pwsh
         env:
           JAYXTERM_LOCAL_DRAG_QA: '1'
           JAYXTERM_WORKSPACE_QA: '1'
@@ -27,14 +33,139 @@ jobs:
           JAYXTERM_SETTINGS_QA: '1'
           JAYXTERM_FEATURES_QA: '1'
           JAYXTERM_ASSIST_QA: '1'
-        run: |
-          ./scripts/windows.ps1 smoke
+        run: ./scripts/windows.ps1 smoke
       - name: Package Windows x64
-        shell: pwsh
+        if: github.event_name == 'workflow_dispatch'
         run: ./scripts/windows.ps1 package
+      - name: Build Windows drag helper
+        if: github.event_name != 'workflow_dispatch'
+        run: npm run build:drag
       - name: Verify native drag data object
         run: node scripts/native-drag-check.cjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
+        if: github.event_name == 'workflow_dispatch'
         with:
           name: JayXTerm-Windows-x64
-          path: .codex-cache/releases/*.exe
+          path: |
+            .codex-cache/releases/JayXTerm-*-x64-setup.exe
+            .codex-cache/releases/JayXTerm-*-x64-portable.exe
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0
+          overwrite: true
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          architecture: arm64
+          package-manager-cache: false
+      - name: Prepare build cache
+        run: |
+          cache="$GITHUB_WORKSPACE/.codex-cache"
+          mkdir -p "$cache/tmp" "$cache/npm" "$cache/electron" "$cache/electron-builder"
+          {
+            echo "TMPDIR=$cache/tmp"
+            echo "TMP=$cache/tmp"
+            echo "TEMP=$cache/tmp"
+            echo "npm_config_cache=$cache/npm"
+            echo "ELECTRON_CACHE=$cache/electron"
+            echo "ELECTRON_BUILDER_CACHE=$cache/electron-builder"
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false"
+          } >> "$GITHUB_ENV"
+      - name: Install and test
+        run: |
+          npm ci
+          npm test
+      - name: Build renderer and verify Finder drag module
+        run: |
+          npm run build
+          npm run build:finder-drag
+          ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e '
+            const assert = require("node:assert/strict");
+            const binding = require("./.codex-cache/build/native/jayxterm-finder-drag.node");
+            assert.equal(process.arch, "arm64");
+            assert.equal(typeof binding.arm, "function");
+            assert.equal(typeof binding.publish, "function");
+          '
+      - name: Package Mac Apple Silicon
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          ./node_modules/.bin/electron-builder --mac dmg --arm64 --publish never \
+            --config.electronDist=node_modules/electron/dist \
+            --config.mac.identity=- --config.mac.hardenedRuntime=false --config.dmg.sign=false
+          version="$(node -p 'require("./package.json").version')"
+          hdiutil verify ".codex-cache/releases/JayXTerm-${version}-arm64.dmg"
+      - uses: actions/upload-artifact@v6
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: JayXTerm-Mac-Apple-Silicon
+          path: .codex-cache/releases/JayXTerm-*-arm64.dmg
+          if-no-files-found: error
+          include-hidden-files: true
+          compression-level: 0
+          overwrite: true
+  release:
+    if: github.event_name == 'workflow_dispatch' && github.ref_type == 'branch'
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: JayXTerm-*
+          path: .codex-cache/release-assets
+          merge-multiple: true
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(jq -er '.version | strings | select(test("^[0-9]+[.][0-9]+[.][0-9]+$"))' package.json)"
+          tag="v$version"
+          assets="$GITHUB_WORKSPACE/.codex-cache/release-assets"
+          setup="JayXTerm-${version}-x64-setup.exe"
+          portable="JayXTerm-${version}-x64-portable.exe"
+          mac="JayXTerm-${version}-arm64.dmg"
+          (
+            cd "$assets"
+            for file in "$setup" "$portable" "$mac"; do
+              test -s "$file" || { echo "::error::Missing release asset $file"; exit 1; }
+            done
+            sha256sum "$setup" "$portable" "$mac" > SHA256SUMS.txt
+          )
+          draft="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          if [[ "$draft" == false ]]; then
+            echo "::error::Release $tag is already published. Use a new version for the next release."
+            exit 1
+          fi
+          if existing="$(git rev-parse --verify --quiet "refs/tags/$tag^{commit}")"; then
+            if [[ "$existing" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag $tag points to a different commit."
+              exit 1
+            fi
+          else
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          fi
+          if [[ "$draft" != true ]]; then
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "JayXTerm $version" --generate-notes --draft
+          fi
+          if ! gh release upload "$tag" \
+            "$assets/$setup" "$assets/$portable" "$assets/$mac" "$assets/SHA256SUMS.txt" \
+            --repo "$GITHUB_REPOSITORY" --clobber; then
+            echo "::error::Asset upload failed. Re-run the job to finish the draft."
+            exit 1
+          fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false

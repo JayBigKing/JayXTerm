@@ -63,7 +63,12 @@ async function setup(t) {
     }
     throw Error("Drag helper did not receive the command");
   }
-  return { start, command, release: (status) => fs.writeFile(releasePath, status),
+  async function release(status) {
+    const pending = releasePath + ".new";
+    await fs.writeFile(pending, status);
+    await fs.rename(pending, releasePath);
+  }
+  return { start, command, release,
     busyTransfers, remoteDrags, token, drag, messages };
 }
 
