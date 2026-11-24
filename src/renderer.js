@@ -8,6 +8,7 @@ import { installKeywordHighlights } from "./terminal-keywords.mjs";
 import { installTerminalSearch } from "./terminal-search.js";
 import { fileIcon, trashIcon } from "./file-icons.js";
 import { installQuickPasswords } from "./quick-passwords.js";
+import { installTerminalEcho } from "./terminal-echo.mjs";
 import "./style.css";
 const $ = (s) => document.querySelector(s);
 const api = window.api;
@@ -32,6 +33,7 @@ let fontPreferences = { ...terminalDefaults };
 let fontOptions = terminalFont(fontPreferences);
 let defaultEncoding = terminalDefaults.defaultEncoding;
 let highlightKeywords = true;
+let predictiveEcho = true;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -88,6 +90,8 @@ function updateSettings(settings) {
   renderBackground(settings.backgroundColor);
   renderTerminalFont(settings);
   renderKeywordHighlights(settings.highlightKeywords);
+  predictiveEcho = settings.predictiveEcho;
+  for (const tab of tabs.values()) tab.echo.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
   fileOpen = settings.fileOpen;
@@ -510,6 +514,7 @@ function createTerminal(session, id, { moving = false } = {}) {
   };
   tab.highlights = installKeywordHighlights(term, theme, highlightKeywords);
   tab.passwordPrompt = quickPasswords.watch(tab);
+  tab.echo = installTerminalEcho(tab, predictiveEcho);
   term.parser.registerOscHandler(7, (value) => {
     const match = /^file:\/\/([^/]*)(\/[^\x00-\x1f]*)$/.exec(value);
     if (!match) return true;
@@ -556,6 +561,7 @@ function createTerminal(session, id, { moving = false } = {}) {
   };
   term.onData((data) => {
     quickPasswords.userInput(tab);
+    tab.echo.input(data);
     if (!tab.moving) api.send({ type: "input", id, data });
   });
   term.onResize(
@@ -818,6 +824,7 @@ function closeTab(id, disconnect = true) {
   terminalSearch.remove(t);
   t.highlights.dispose();
   t.passwordPrompt.dispose();
+  t.echo.dispose();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
@@ -860,9 +867,11 @@ api.onEvent((m) => {
   if (!t) return;
   if (m.type === "data") {
     const bytes = Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0));
-    t.term.write(bytes, () =>
-      api.send({ type: "ack", id: m.id, bytes: m.bytes }),
-    );
+    const rendered = t.echo.output(bytes);
+    t.term.write(bytes, () => {
+      rendered();
+      api.send({ type: "ack", id: m.id, bytes: m.bytes });
+    });
   } else if (m.type === "ready") {
     t.state = "已连接";
     fitTerminal(t);
@@ -870,6 +879,7 @@ api.onEvent((m) => {
     if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
     if (current === t.id) activate(t.id);
   } else if (m.type === "closed" || m.type === "error") {
+    t.echo.reset();
     clearCwdQuery(t);
     t.state = m.type === "closed" ? "已断开" : "连接出错";
     quickPasswords.activate();
@@ -878,7 +888,7 @@ api.onEvent((m) => {
     if (current === t.id)
       $("#status").textContent =
         `${t.session.username}@${t.session.host} · ${t.state}`;
-  } else if (m.type === "progress") {
+  } else if (m.type === "progress" && (t.transferring || t.localDragging)) {
     const text = `${m.files || 0} 个文件完成 · ${m.name?.split("/").pop() || ""} ${m.total ? Math.round((m.current / m.total) * 100) : 0}%`;
     showTransfer(t, text);
   }
@@ -897,6 +907,11 @@ function renderSidebarFiles(tab) {
   renderFiles(tab, $("#file-list"));
   $("#transfer-status").textContent = tab.transferStatus ||
     (fileOpen === "single" ? "拖入上传 · 单击文件编辑" : "拖入上传 · 双击文件编辑");
+}
+function warmLocalDrag() {
+  if (!localDragAvailable || localDragWarmed) return;
+  localDragWarmed = true;
+  api.warmLocalDrag();
 }
 function renderFiles(t, list) {
   highlightDropTarget(null);
@@ -921,16 +936,19 @@ function renderFiles(t, list) {
     let localGesture = false;
     if (!f.symlink) {
       row.draggable = true;
+      row.onpointerenter = warmLocalDrag;
       row.onpointerdown = () => { localGesture = false; };
       row.ondragstart = (event) => {
         if (localGesture) event.preventDefault();
-        else startRemoteDrag(event, t.id, remoteJoin(t.path, f.name));
+        else localGesture = startRemoteDrag(event, t.id, remoteJoin(t.path, f.name)) === true;
       };
     }
     const gesture = fileOpen === "single" && !f.symlink ? "单击" : "双击";
     row.title = f.directory
       ? gesture + "进入目录；右侧 ↓ 下载整个目录"
       : f.symlink ? "双击下载文件" : gesture + "编辑；右侧 ↓ 下载文件";
+    if (localDragAvailable && !f.symlink)
+      row.title += "；拖动可复制到 Windows 桌面、文件夹或其他 SSH 面板";
     if (f.directory) row.dataset.directory = remoteJoin(t.path, f.name);
     row.append(
       fileIcon(f),
@@ -959,14 +977,10 @@ function renderFiles(t, list) {
       const grip = el("button", "local-drag", "↗");
       grip.type = "button";
       grip.tabIndex = -1;
-      grip.title = "拖到 Windows 文件夹";
+      grip.title = "拖到 Windows 桌面或文件夹";
       grip.setAttribute("aria-label", grip.title);
       grip.onclick = (event) => event.stopPropagation();
-      grip.onpointerenter = () => {
-        if (localDragWarmed) return;
-        localDragWarmed = true;
-        api.warmLocalDrag();
-      };
+      grip.onpointerenter = warmLocalDrag;
       let press;
       grip.onpointerdown = (event) => {
         if (event.button !== 0 || !event.isPrimary) return;
@@ -997,13 +1011,14 @@ function renderFiles(t, list) {
       else openRemoteEditor(t, f);
     };
     row.onclick = (event) => {
+      if (localGesture) return;
       t.selected = f;
       list.querySelector(".file-row.selected")?.classList.remove("selected");
       row.classList.add("selected");
       if (fileOpen === "single" && !f.symlink && event.detail <= 1) open();
     };
     row.ondblclick = (event) => {
-      if (!event.target.closest("button") && (fileOpen === "double" || f.symlink)) open();
+      if (!localGesture && !event.target.closest("button") && (fileOpen === "double" || f.symlink)) open();
     };
     row.onkeydown = (e) => {
       if (e.key === "Enter" && e.target === row) {
@@ -1123,6 +1138,8 @@ function startRemoteDrag(event, id, path) {
   if (
     !tab ||
     tab.moving ||
+    tab.loading ||
+    tab.removing ||
     tab.transferring ||
     tab.state !== "已连接" ||
     event.target.closest("button")
@@ -1138,6 +1155,13 @@ function startRemoteDrag(event, id, path) {
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData(remoteDragType, token);
   event.dataTransfer.setData("text/plain", remoteTokenPrefix + token);
+  if (localDragAvailable) {
+    // Cancel Chromium's text-only drag before the helper takes over. The native
+    // data object carries this same token for drops back into an SSH panel.
+    event.preventDefault();
+    api.startLocalDrag({ id, path, token });
+    return true;
+  }
 }
 for (const type of ["dragover", "drop"])
   document.addEventListener(type, (event) => event.preventDefault());
@@ -1413,6 +1437,7 @@ function toggleFileWorkspace(focus = true) {
 }
 $("#file-workspace-toggle").onclick = () => toggleFileWorkspace();
 function markMoving(t, moving) {
+  t.echo.reset();
   t.moving = moving;
   t.term.options.disableStdin = moving;
   t.pane.classList.toggle("moving", moving);
@@ -1428,7 +1453,10 @@ api.onWindow(async (m) => {
   }
   if (m.type === "local-drag-status") {
     const tab = tabs.get(m.id);
-    if (tab) showTransfer(tab, m.message);
+    if (tab) {
+      tab.localDragging = m.active;
+      if (m.message) showTransfer(tab, m.message);
+    }
     return;
   }
   if (m.type === "settings-changed") {
