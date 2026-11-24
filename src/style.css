@@ -474,6 +474,7 @@ h1 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.file-row.finder-draggable { user-select: none; }
 .file-row small {
   font-size: 9px;
   color: var(--page-muted);
@@ -680,7 +681,7 @@ select {
   border: 0;
   font-size: 11px;
 }
-.password-field:has(.password-book-button) input { padding-right: 119px; }
+.password-field:has(.password-book-button:not([hidden])) input { padding-right: 119px; }
 .password-field button.password-book-button { right: 50px; color: var(--accent); }
 .statusbar select {
   width: auto;
@@ -1052,7 +1053,7 @@ dialog pre {
 .keyword-legend { display: flex; flex-wrap: wrap; gap: 7px 16px; }
 .keyword-info { color: var(--accent); }
 .statusbar > span:last-child { display: flex; align-items: center; }
-.statusbar #terminal-search-toggle { display: inline-flex; align-items: center; gap: 4px; }
+.statusbar #terminal-search-toggle:not([hidden]) { display: inline-flex; align-items: center; gap: 4px; }
 .statusbar button[aria-expanded="true"] { color: var(--ink); background: var(--hover); }
 .statusbar svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 .app-content main { position: relative; }

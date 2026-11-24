@@ -5,7 +5,7 @@ export function installTerminalSearch({ getActiveTab, showTerminal, getTheme }) 
   const panel = $("#terminal-search"), input = $("#terminal-search-input");
   const toggle = $("#terminal-search-toggle"), count = $("#terminal-search-count");
   const previous = $("#terminal-search-previous"), next = $("#terminal-search-next");
-  let active, listener, timer;
+  let enabled = false, active, addon, listener, timer;
   function results({ resultIndex = -1, resultCount = 0 } = {}) {
     count.textContent = resultIndex < 0 && resultCount >= 1000 ? "1000+" :
       `${Math.max(0, resultIndex + 1)} / ${resultCount}`;
@@ -26,43 +26,47 @@ export function installTerminalSearch({ getActiveTab, showTerminal, getTheme }) 
   function find(backward = false, incremental = false) {
     clearTimeout(timer);
     if (panel.hidden || !active || active !== getActiveTab()) return;
-    if (!input.value) { active.search.clearDecorations(); results(); return; }
-    active.search[backward ? "findPrevious" : "findNext"](input.value, options(incremental));
+    if (!input.value) { addon.clearDecorations(); results(); return; }
+    addon[backward ? "findPrevious" : "findNext"](input.value, options(incremental));
+  }
+  function release() {
+    clearTimeout(timer);
+    listener?.dispose();
+    addon?.dispose();
+    listener = addon = active = null;
   }
   function bind() {
+    if (!enabled) return;
     const tab = getActiveTab();
     toggle.disabled = !tab || tab.moving;
-    if (active === tab) return;
-    listener?.dispose();
-    active?.search?.clearDecorations();
-    active = tab;
+    if (panel.hidden || active === tab) return;
+    release();
     results();
-    if (!active) { close(false); return; }
-    if (!active.search) {
-      active.search = new SearchAddon({ highlightLimit: 1000 });
-      active.term.loadAddon(active.search);
-    }
-    listener = active.search.onDidChangeResults(results);
-    if (!panel.hidden) find(false, true);
+    if (!tab) { close(false); return; }
+    active = tab;
+    addon = new SearchAddon({ highlightLimit: 1000 });
+    tab.term.loadAddon(addon);
+    listener = addon.onDidChangeResults(results);
+    find(false, true);
   }
   function close(focus = true) {
-    clearTimeout(timer);
     panel.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
-    active?.search?.clearDecorations();
+    release();
     results();
     if (focus) getActiveTab()?.term.focus();
   }
   toggle.onclick = () => {
+    if (!enabled) return;
     if (!panel.hidden) { close(); return; }
     showTerminal();
-    bind();
-    if (!active) return;
-    const selection = active.term.getSelection();
+    const tab = getActiveTab();
+    if (!tab || tab.moving) return;
+    const selection = tab.term.getSelection();
     if (selection && !/[\r\n]/.test(selection) && selection.length <= 1000) input.value = selection;
     panel.hidden = false;
     toggle.setAttribute("aria-expanded", "true");
-    find(false, true);
+    bind();
     input.focus();
     input.select();
   };
@@ -79,20 +83,27 @@ export function installTerminalSearch({ getActiveTab, showTerminal, getTheme }) 
     const button = event.currentTarget;
     button.setAttribute("aria-pressed", String(button.getAttribute("aria-pressed") !== "true"));
     // Rebuild the cached matches even when only the search flags changed.
-    active?.search.clearDecorations();
+    addon?.clearDecorations();
     find(false, true);
   };
   results();
   return {
     activate: bind,
     close,
-    refreshTheme() { if (!panel.hidden) { active?.search.clearDecorations(); find(false, true); } },
+    setEnabled(value) {
+      if (enabled === value) return;
+      enabled = value;
+      toggle.hidden = !enabled;
+      if (enabled) bind();
+      else {
+        toggle.disabled = true;
+        close(panel.contains(document.activeElement));
+        input.value = "";
+      }
+    },
+    refreshTheme() { if (addon) { addon.clearDecorations(); find(false, true); } },
     remove(tab) {
-      if (active !== tab) return;
-      listener?.dispose();
-      listener = null;
-      active.search?.clearDecorations();
-      active = null;
+      if (active === tab) release();
     },
   };
 }

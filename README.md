@@ -20,7 +20,7 @@ JayXTerm 是面向 Windows 的开源 SSH / SFTP 工作台。可以在同一个�
 
 ## 下载和开始使用
 
-1. 在 [GitHub Releases](https://github.com/JayBigKing/JayXTerm/releases) 查找 Windows x64 便携版。运行打包后的 EXE 无需安装 Node.js。也可以从 [Actions](https://github.com/JayBigKing/JayXTerm/actions/workflows/windows.yml) 的成功构建下载 Windows 构建产物。
+1. 在 [GitHub Releases](https://github.com/JayBigKing/JayXTerm/releases) 查找 Windows x64 安装版、便携版和 Mac Apple Silicon DMG。运行打包后的 EXE 无需安装 Node.js。
 2. 点击「新建会话」，填写主机、端口和用户名。名称留空时会自动生成，例如 `192.168.1.10:2007 · root`。
 3. 双击会话连接。首次连接时核对服务器指纹，之后可用左栏浏览远程文件，或进入标题栏的「文件空间」并排操作。
 4. 需要迁移会话时，打开「工作台」，选择从 Xshell 或 OpenSSH 导入。确认预览后才写入会话库。
@@ -66,6 +66,12 @@ powershell -ExecutionPolicy Bypass -File scripts/windows.ps1 package
 构建产物位于 `.codex-cache/releases/`。开发配置、测试数据和构建缓存也位于仓库的 `.codex-cache/`。安装依赖和首次构建需要联网。
 
 设置界面分为外观、终端、文件与存储、密码。分类与字段布局在 `index.html`，载入、预览、保存和分类导航集中在 `src/settings-panel.js`；新增选项时扩展字段列表及 `src/app-settings.cjs` 的默认值与校验即可。字体枚举、搜索与列表交互在 `src/font-picker.js`，中文字体按字符范围载入的逻辑在 `src/terminal-fonts.js`。
+
+## 自动测试与发版
+
+推送 `jay_version` 或主分支以及提交 Pull Request 时，GitHub Actions 会自动测试 Windows 和 macOS。
+
+发版时，在 [Actions 的构建页面](https://github.com/JayBigKing/JayXTerm/actions/workflows/windows.yml) 点击 **Run workflow**，选择要构建的分支（`main` 或 `jay_version`）。测试通过后，Actions 会根据该分支 `package.json` 的版本号创建标签和 Release，并上传 Windows x64 安装版、便携版、Mac Apple Silicon DMG 和 SHA-256 校验文件。两个分支共用仓库的版本标签，发版前请在 `package.json` 与 `package-lock.json` 中使用尚未发布的版本号。
 
 ## 参与贡献
 

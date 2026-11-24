@@ -68,34 +68,43 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(initial.fontSize, 14);
   assert.equal(initial.defaultEncoding, "utf-8");
   assert.equal(initial.highlightKeywords, true);
+  assert.equal(initial.terminalSearchEnabled, true);
+  assert.equal(initial.quickPasswordsEnabled, false);
   assert.equal(initial.predictiveEcho, true);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
-  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: false, predictiveEcho: false });
+  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: true, terminalSearchEnabled: true, quickPasswordsEnabled: true, predictiveEcho: false });
   const reloaded = open();
   assert.equal(reloaded.describe().fontFamily, "Consolas");
   assert.equal(reloaded.describe().cjkFontFamily, "Microsoft YaHei");
   assert.equal(reloaded.describe().fontSize, 20);
   assert.equal(reloaded.describe().defaultEncoding, "gb2312");
-  assert.equal(reloaded.describe().highlightKeywords, false);
+  assert.equal(reloaded.describe().highlightKeywords, true);
   reloaded.apply({ ...base, backgroundColor: "#ffffff" });
   assert.equal(open().describe().fontSize, 20);
   assert.equal(open().describe().cjkFontFamily, "Microsoft YaHei");
-  assert.equal(open().describe().highlightKeywords, false);
+  assert.equal(open().describe().highlightKeywords, true);
+  assert.equal(open().describe().terminalSearchEnabled, true);
+  assert.equal(open().describe().quickPasswordsEnabled, true);
   assert.equal(open().describe().predictiveEcho, false);
   const previous = fs.readFileSync(file, "utf8");
   for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
     { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" },
     { cjkFontFamily: null }, { cjkFontFamily: "   " }, { cjkFontFamily: 'bad" font' },
-    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { predictiveEcho: "yes" }]) {
-    assert.throws(() => open().apply({ ...base, ...invalid }), /终端设置/);
+    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { terminalSearchEnabled: null }, { quickPasswordsEnabled: 1 }, { predictiveEcho: "yes" }]) {
+    assert.throws(() => open().apply({ ...base, ...invalid }), /终端(设置|功能开关)/);
     assert.equal(fs.readFileSync(file, "utf8"), previous);
   }
-  reloaded.apply({ ...base, cjkFontFamily: "" });
+  reloaded.apply({ ...base, cjkFontFamily: "", highlightKeywords: false, terminalSearchEnabled: false, quickPasswordsEnabled: false });
+  assert.equal(open().describe().highlightKeywords, false);
+  assert.equal(open().describe().terminalSearchEnabled, false);
+  assert.equal(open().describe().quickPasswordsEnabled, false);
   assert.equal(open().describe().cjkFontFamily, "");
   // Existing installations keep their chosen font and gain automatic CJK fallback.
   fs.writeFileSync(file, JSON.stringify({ fontFamily: "Consolas", fontSize: 16 }));
   assert.equal(open().describe().fontFamily, "Consolas");
   assert.equal(open().describe().cjkFontFamily, "");
+  assert.equal(open().describe().highlightKeywords, true);
+  assert.equal(open().describe().terminalSearchEnabled, true);
   fs.writeFileSync(file, JSON.stringify({ fontSize: -1, fontFamily: null, defaultEncoding: "invalid" }));
   assert.equal(open().describe().fontSize, 14);
   assert.equal(open().describe().fontFamily, "Cascadia Mono");
@@ -120,4 +129,54 @@ test("cache changes apply on restart and migrate cache folders without copying t
   assert.equal(restarted.describe().pendingCache, null);
   restarted.apply({ cachePath: "", migrate: false, saveHistory: false, fileOpen: "double" });
   assert.equal(open().initializeCache(), profile);
+});
+
+test("Windows cache switches leave the original DPAPI key and saved session data in the fixed profile", (t) => {
+  const { root, profile, open } = setup(t);
+  const legacyCache = path.join(root, "legacy-cache");
+  const nextCache = path.join(root, "next-cache");
+  const originalState = JSON.stringify({
+    os_crypt: { encrypted_key: Buffer.from("DPAPI-original").toString("base64") },
+    other_preference: true,
+  });
+  const otherState = JSON.stringify({
+    os_crypt: { encrypted_key: Buffer.from("DPAPI-other").toString("base64") },
+  });
+  const settings = open();
+  const input = { saveHistory: false, fileOpen: "double" };
+  settings.apply({ ...input, cachePath: legacyCache });
+  open().initializeCache();
+  fs.writeFileSync(path.join(profile, "Local State"), originalState);
+  fs.writeFileSync(path.join(legacyCache, "Local State"), otherState);
+  fs.writeFileSync(path.join(profile, "sessions.json"), '{"sessions":[{"password":"saved-ciphertext"}]}');
+
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), legacyCache);
+  open().apply({ ...input, cachePath: nextCache, migrate: false });
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), nextCache);
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), nextCache);
+  assert.equal(fs.readFileSync(path.join(profile, "Local State"), "utf8"), originalState);
+  assert.equal(fs.readFileSync(path.join(legacyCache, "Local State"), "utf8"), otherState);
+  assert.equal(fs.existsSync(path.join(nextCache, "Local State")), false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(profile, "sessions.json"))).sessions[0].password, "saved-ciphertext");
+});
+
+test("Windows recovers a key stored only in the last active custom cache", (t) => {
+  const { root, profile, open } = setup(t);
+  const legacyCache = path.join(root, "custom");
+  const input = { saveHistory: false, fileOpen: "double" };
+  open().apply({ ...input, cachePath: legacyCache });
+  open().initializeCache();
+  const key = Buffer.from("DPAPI-legacy").toString("base64");
+  const legacyState = JSON.stringify({ os_crypt: { encrypted_key: key }, other_cache_data: true });
+  fs.writeFileSync(path.join(legacyCache, "Local State"), legacyState);
+  const defaultFile = path.join(profile, "Local State");
+  fs.writeFileSync(defaultFile, JSON.stringify({ fixed_preference: true }));
+
+  open().apply({ ...input, cachePath: "", migrate: false });
+  assert.equal(open().initializeCache({ restoreWindowsKey: true }), profile);
+  assert.deepEqual(JSON.parse(fs.readFileSync(defaultFile, "utf8")), {
+    fixed_preference: true,
+    os_crypt: { encrypted_key: key },
+  });
+  assert.equal(fs.readFileSync(path.join(legacyCache, "Local State"), "utf8"), legacyState);
 });

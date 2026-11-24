@@ -32,7 +32,8 @@ let theme = applyTheme("#394351");
 let fontPreferences = { ...terminalDefaults };
 let fontOptions = terminalFont(fontPreferences);
 let defaultEncoding = terminalDefaults.defaultEncoding;
-let highlightKeywords = true;
+let highlightKeywords = false;
+let quickPasswordsEnabled = false;
 let predictiveEcho = true;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -50,7 +51,7 @@ function renderBackground(color) {
   theme = applyTheme(color);
   for (const tab of tabs.values()) {
     tab.term.options.theme = theme.terminal;
-    tab.highlights.setTheme(theme);
+    tab.highlights?.setTheme(theme);
   }
   terminalSearch.refreshTheme();
   api.windowTheme(color);
@@ -77,8 +78,12 @@ function renderTerminalFont(settings) {
 const settingsPanel = installSettingsPanel({ api, previewColor: renderBackground,
   previewFont: renderTerminalFont, previewKeywords: renderKeywordHighlights, onSave: updateSettings, toast });
 function renderKeywordHighlights(enabled) {
+  if (enabled === highlightKeywords) return;
   highlightKeywords = enabled;
-  for (const tab of tabs.values()) tab.highlights.setEnabled(enabled);
+  for (const tab of tabs.values()) {
+    tab.highlights?.dispose();
+    tab.highlights = enabled ? installKeywordHighlights(tab.term, theme) : null;
+  }
 }
 function showTerminal() {
   if (fileWorkspaceOpen) toggleFileWorkspace(false);
@@ -90,6 +95,16 @@ function updateSettings(settings) {
   renderBackground(settings.backgroundColor);
   renderTerminalFont(settings);
   renderKeywordHighlights(settings.highlightKeywords);
+  terminalSearch.setEnabled(settings.terminalSearchEnabled);
+  if (quickPasswordsEnabled !== settings.quickPasswordsEnabled) {
+    quickPasswordsEnabled = settings.quickPasswordsEnabled;
+    quickPasswords.setEnabled(quickPasswordsEnabled);
+    for (const tab of tabs.values()) {
+      tab.passwordPrompt?.dispose();
+      tab.passwordPrompt = quickPasswordsEnabled ? quickPasswords.watch(tab) : null;
+    }
+    if (quickPasswordsEnabled) quickPasswords.activate();
+  }
   predictiveEcho = settings.predictiveEcho;
   for (const tab of tabs.values()) tab.echo.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
@@ -512,8 +527,8 @@ function createTerminal(session, id, { moving = false } = {}) {
     files: [],
     loadVersion: 0,
   };
-  tab.highlights = installKeywordHighlights(term, theme, highlightKeywords);
-  tab.passwordPrompt = quickPasswords.watch(tab);
+  if (highlightKeywords) tab.highlights = installKeywordHighlights(term, theme);
+  if (quickPasswordsEnabled) tab.passwordPrompt = quickPasswords.watch(tab);
   tab.echo = installTerminalEcho(tab, predictiveEcho);
   term.parser.registerOscHandler(7, (value) => {
     const match = /^file:\/\/([^/]*)(\/[^\x00-\x1f]*)$/.exec(value);
@@ -560,7 +575,7 @@ function createTerminal(session, id, { moving = false } = {}) {
       .catch((error) => toast(error.message));
   };
   term.onData((data) => {
-    quickPasswords.userInput(tab);
+    if (quickPasswordsEnabled) quickPasswords.userInput(tab);
     tab.echo.input(data);
     if (!tab.moving) api.send({ type: "input", id, data });
   });
@@ -770,7 +785,7 @@ function fitTerminal(t) {
       cols: t.term.cols,
       rows: t.term.rows,
     });
-  t.highlights.refresh();
+  t.highlights?.refresh();
 }
 function activate(id, focus = true) {
   current = id;
@@ -822,8 +837,8 @@ function closeTab(id, disconnect = true) {
   if (disconnect) api.send({ type: "disconnect", id });
   clearCwdQuery(t);
   terminalSearch.remove(t);
-  t.highlights.dispose();
-  t.passwordPrompt.dispose();
+  t.highlights?.dispose();
+  t.passwordPrompt?.dispose();
   t.echo.dispose();
   t.term.dispose();
   t.pane.remove();
@@ -909,7 +924,7 @@ function renderSidebarFiles(tab) {
     (fileOpen === "single" ? "拖入上传 · 单击文件编辑" : "拖入上传 · 双击文件编辑");
 }
 function warmLocalDrag() {
-  if (!localDragAvailable || localDragWarmed) return;
+  if (localDragAvailable !== true || localDragWarmed) return;
   localDragWarmed = true;
   api.warmLocalDrag();
 }
@@ -935,11 +950,18 @@ function renderFiles(t, list) {
     row.setAttribute("role", "button");
     let localGesture = false;
     if (!f.symlink) {
-      row.draggable = true;
+      const finder = localDragAvailable === "finder";
+      row.draggable = !finder;
+      if (finder) row.classList.add("finder-draggable");
       row.onpointerenter = warmLocalDrag;
-      row.onpointerdown = () => { localGesture = false; };
+      row.onpointerdown = (event) => {
+        localGesture = false;
+        if (finder && event.isTrusted && event.pointerType === "mouse" && event.button === 0 &&
+            !event.target.closest("button") && !t.localDragging && canDragRemote(t))
+          api.armFinderDrag({ id: t.id, path: remoteJoin(t.path, f.name), directory: f.directory });
+      };
       row.ondragstart = (event) => {
-        if (localGesture) event.preventDefault();
+        if (localGesture || (finder && event.isTrusted)) event.preventDefault();
         else localGesture = startRemoteDrag(event, t.id, remoteJoin(t.path, f.name)) === true;
       };
     }
@@ -948,7 +970,9 @@ function renderFiles(t, list) {
       ? gesture + "进入目录；右侧 ↓ 下载整个目录"
       : f.symlink ? "双击下载文件" : gesture + "编辑；右侧 ↓ 下载文件";
     if (localDragAvailable && !f.symlink)
-      row.title += "；拖动可复制到 Windows 桌面、文件夹或其他 SSH 面板";
+      row.title += localDragAvailable === "finder"
+        ? "；拖动可复制到 Finder 或其他 SSH 面板"
+        : "；拖动可复制到 Windows 桌面、文件夹或其他 SSH 面板";
     if (f.directory) row.dataset.directory = remoteJoin(t.path, f.name);
     row.append(
       fileIcon(f),
@@ -973,7 +997,7 @@ function renderFiles(t, list) {
       deleteRemote(t, remoteJoin(t.path, f.name));
     };
     row.append(remove);
-    if (localDragAvailable && !f.symlink) {
+    if (localDragAvailable === true && !f.symlink) {
       const grip = el("button", "local-drag", "↗");
       grip.type = "button";
       grip.tabIndex = -1;
@@ -1133,17 +1157,12 @@ async function transfer(
   }
 }
 const remoteTokenPrefix = "jayxterm-sftp:";
+function canDragRemote(tab) {
+  return tab?.state === "已连接" &&
+    !tab.moving && !tab.loading && !tab.removing && !tab.transferring;
+}
 function startRemoteDrag(event, id, path) {
-  const tab = tabs.get(id);
-  if (
-    !tab ||
-    tab.moving ||
-    tab.loading ||
-    tab.removing ||
-    tab.transferring ||
-    tab.state !== "已连接" ||
-    event.target.closest("button")
-  ) {
+  if (!canDragRemote(tabs.get(id)) || event.target.closest("button")) {
     event.preventDefault();
     return;
   }
@@ -1154,8 +1173,8 @@ function startRemoteDrag(event, id, path) {
   }
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData(remoteDragType, token);
-  event.dataTransfer.setData("text/plain", remoteTokenPrefix + token);
-  if (localDragAvailable) {
+  if (localDragAvailable === true) {
+    event.dataTransfer.setData("text/plain", remoteTokenPrefix + token);
     // Cancel Chromium's text-only drag before the helper takes over. The native
     // data object carries this same token for drops back into an SSH panel.
     event.preventDefault();
@@ -1447,6 +1466,10 @@ function markMoving(t, moving) {
     $("#move-tab").disabled = moving || t.state !== "已连接";
 }
 api.onWindow(async (m) => {
+  if (m.type === "passwords-changed") {
+    if (quickPasswordsEnabled) quickPasswords.refresh();
+    return;
+  }
   if (m.type === "duplicate-tab") {
     await duplicateTab(tabs.get(m.id));
     return;

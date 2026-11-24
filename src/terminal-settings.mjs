@@ -4,6 +4,8 @@ export const terminalDefaults = {
   fontSize: 14,
   defaultEncoding: "utf-8",
   highlightKeywords: true,
+  terminalSearchEnabled: true,
+  quickPasswordsEnabled: false,
   predictiveEcho: true,
 };
 export const terminalEncodings = ["utf-8", "gbk", "gb2312"];

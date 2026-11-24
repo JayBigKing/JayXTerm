@@ -6,6 +6,7 @@ const {
   dialog,
   Menu,
   clipboard,
+  session,
 } = require("electron");
 const { createWindows } = require("./windows.cjs");
 const { normalizeEncoding } = require("./codec.cjs");
@@ -59,23 +60,32 @@ function ensureOwner(sender, id) {
 const hasInstanceLock =
   process.env.JAYXTERM_QA || app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
+const defaultCache = app.getPath("sessionData");
 const appSettings = hasInstanceLock && openAppSettings(
   path.join(app.getPath("userData"), "settings.json"),
-  app.getPath("sessionData"),
+  defaultCache,
   safeStorage,
 );
-if (appSettings) app.setPath("sessionData", appSettings.initializeCache());
-const passwordVault = hasInstanceLock && openPasswordVault(path.join(app.getPath("userData"), "quick-passwords.json"), safeStorage);
+// Electron reads its Windows safeStorage key from sessionData/Local State
+// before ready. Keep that path fixed and route only the windows' session.
+const windowCache = appSettings && appSettings.initializeCache({ restoreWindowsKey: process.platform === "win32" });
+let passwordVault;
 const active = new Map(),
   requests = new Map();
 const pendingPasswords = new Map();
 const tests = new Map();
 const remoteDrags = new Map();
+function decryptSessionPassword(encrypted) {
+  if (!encrypted) return "";
+  try {
+    return safeStorage.decryptString(Buffer.from(encrypted, "base64"));
+  } catch {
+    throw new Error("无法读取已保存的密码。请编辑会话，重新输入并保存密码。");
+  }
+}
 function storedPassword(id) {
   const s = store.get().sessions.find((s) => s.id === id);
-  return s?.password
-    ? safeStorage.decryptString(Buffer.from(s.password, "base64"))
-    : "";
+  return decryptSessionPassword(s?.password);
 }
 function finishTest(id, error, result) {
   const t = tests.get(id);
@@ -124,6 +134,7 @@ app.whenReady().then(() => {
     send,
     request,
     background: () => appSettings.describe().backgroundColor,
+    browserSession: windowCache === defaultCache ? undefined : session.fromPath(windowCache),
     isBusy: (id) => busyTransfers.has(id),
     onDisconnect: (id) => {
       active.delete(id);
@@ -143,16 +154,30 @@ app.whenReady().then(() => {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       }
     : process.platform === "win32" && existsSync(nativeDrag) ? { file: nativeDrag } : null;
-  app.once("will-quit", installLocalDrag({
-    ipcMain,
-    helper: dragHelper,
-    tempRoot: path.join(app.getPath("userData"), "drag-out"),
-    ensureOwner,
-    ready: editorConnectionReady,
-    request,
-    busyTransfers,
-    remoteDrags,
-  }));
+  if (process.platform === "darwin" && !dragHelper) {
+    const binding = app.isPackaged
+      ? path.join(process.resourcesPath, "jayxterm-finder-drag.node")
+      : path.join(__dirname, "../.codex-cache/build/native/jayxterm-finder-drag.node");
+    let native, loadError;
+    try { native = require(binding); }
+    catch (error) { loadError = error; }
+    require("./finder-drag.cjs").installFinderDrag({
+      ipcMain, native, loadError, windowFor: (sender) => BrowserWindow.fromWebContents(sender),
+      logFile: path.join(app.getPath("userData"), "finder-drag-last.json"),
+      ensureOwner, ready: editorConnectionReady, request, busyTransfers, createRemoteDrag, remoteDrags,
+    });
+  } else {
+    app.once("will-quit", installLocalDrag({
+      ipcMain,
+      helper: dragHelper,
+      tempRoot: path.join(app.getPath("userData"), "drag-out"),
+      ensureOwner,
+      ready: editorConnectionReady,
+      request,
+      busyTransfers,
+      remoteDrags,
+    }));
+  }
   Menu.setApplicationMenu(null);
   window = workspace.create();
   worker.on("message", async (m) => {
@@ -376,6 +401,7 @@ ipcMain.handle("settings:apply", async (event, input) => {
     }
     const result = appSettings.apply({ ...input, migrate });
     if (!result.saveHistory) pendingPasswords.clear();
+    if (!result.quickPasswordsEnabled) passwordVault = undefined;
     for (const win of BrowserWindow.getAllWindows()) {
       themeWindow(win, result.backgroundColor);
       if (win.webContents.id !== event.sender.id)
@@ -388,47 +414,46 @@ ipcMain.handle("settings:apply", async (event, input) => {
 });
 ipcMain.handle("password-history:list", () => appSettings.listHistory());
 ipcMain.handle("password-history:select", (_e, id) => appSettings.selectPassword(id));
-function requirePasswordWorkspace(event) {
+function requirePasswordVault(event) {
   if (!workspace?.get(event.sender.id) || event.senderFrame !== event.sender.mainFrame)
     throw new Error("请在工作台中管理快捷密码");
+  if (!appSettings.describe().quickPasswordsEnabled)
+    throw new Error("快捷密码本已关闭");
+  return passwordVault ??= openPasswordVault(path.join(app.getPath("userData"), "quick-passwords.json"), safeStorage);
 }
 function broadcastPasswords() {
   workspace.broadcast({ type: "passwords-changed" });
 }
 ipcMain.handle("password-vault:list", event => {
-  requirePasswordWorkspace(event);
-  return passwordVault.list();
+  return requirePasswordVault(event).list();
 });
 ipcMain.handle("password-vault:save", (event, input) => {
-  requirePasswordWorkspace(event);
-  const result = passwordVault.save(input);
+  const result = requirePasswordVault(event).save(input);
   broadcastPasswords();
   return result;
 });
 ipcMain.handle("password-vault:reveal", (event, id) => {
-  requirePasswordWorkspace(event);
-  return passwordVault.reveal(id);
+  return requirePasswordVault(event).reveal(id);
 });
 ipcMain.handle("password-vault:remove", async (event, id) => {
-  requirePasswordWorkspace(event);
-  const item = passwordVault.list().items.find(entry => entry.id === id);
+  const item = requirePasswordVault(event).list().items.find(entry => entry.id === id);
   if (!item) throw new Error("这条快捷密码已不存在");
   const { response } = await dialog.showMessageBox(BrowserWindow.fromWebContents(event.sender), {
     type: "question", message: `删除快捷密码「${item.description}」？`,
     buttons: ["取消", "删除"], defaultId: 0, cancelId: 0,
   });
   if (response !== 1) return { removed: false };
-  passwordVault.remove(id);
+  requirePasswordVault(event).remove(id);
   broadcastPasswords();
   return { removed: true };
 });
 ipcMain.handle("password-vault:fill", (event, { id, passwordId }) => {
-  requirePasswordWorkspace(event);
+  const vault = requirePasswordVault(event);
   ensureOwner(event.sender, id);
   if (!editorConnectionReady(id)) throw new Error("请先连接 SSH");
   // Enter/click explicitly selects and submits to its owning connection.
   // Keep the secret out of the renderer and clipboard.
-  send({ type: "input", id, data: passwordVault.reveal(passwordId) + "\r" });
+  send({ type: "input", id, data: vault.reveal(passwordId) + "\r" });
   return true;
 });
 ipcMain.handle("ssh:test", (e, input) => {
@@ -497,11 +522,7 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows }) => {
   const s = store.get().sessions.find((s) => s.id === sessionId);
   if (!s) throw new Error("会话不存在");
   const id = randomUUID();
-  const secret =
-    password ||
-    (s.password
-      ? safeStorage.decryptString(Buffer.from(s.password, "base64"))
-      : "");
+  const secret = password || decryptSessionPassword(s.password);
   active.set(id, s);
   owners.set(id, e.sender.id);
   states.set(id, "connecting");
@@ -648,19 +669,16 @@ async function uploadPaths(id, remote, paths) {
   return { files, bytes, skipped };
 }
 // Only the window owning the source connection can create a drag token.
-ipcMain.on("sftp:drag-token", (e, { id, path: remote }) => {
+function createRemoteDrag(sender, id, remote) {
   if (
-    owners.get(id) !== e.sender.id ||
+    owners.get(id) !== sender.id ||
     states.get(id) !== "ready" ||
     workspace.moves.has(id) ||
     typeof remote !== "string" ||
     !remote.startsWith("/") ||
     remote.includes("\0") ||
     remote === "/"
-  ) {
-    e.returnValue = "";
-    return;
-  }
+  ) return "";
   const now = Date.now();
   for (const [token, drag] of remoteDrags)
     if (drag.expires <= now) remoteDrags.delete(token);
@@ -670,10 +688,13 @@ ipcMain.on("sftp:drag-token", (e, { id, path: remote }) => {
   remoteDrags.set(token, {
     id,
     remote,
-    owner: e.sender.id,
+    owner: sender.id,
     expires: now + 120000,
   });
-  e.returnValue = token;
+  return token;
+}
+ipcMain.on("sftp:drag-token", (e, { id, path: remote }) => {
+  e.returnValue = createRemoteDrag(e.sender, id, remote);
 });
 ipcMain.handle("sftp:relay", async (e, { id, path: directory, token }) => {
   ensureOwner(e.sender, id);
