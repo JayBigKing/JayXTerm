@@ -75,6 +75,7 @@ jobs:
             echo "TEMP=$cache/tmp"
             echo "npm_config_cache=$cache/npm"
             echo "ELECTRON_CACHE=$cache/electron"
+            echo "electron_config_cache=$cache/electron"
             echo "ELECTRON_BUILDER_CACHE=$cache/electron-builder"
             echo "CSC_IDENTITY_AUTO_DISCOVERY=false"
           } >> "$GITHUB_ENV"
@@ -99,6 +100,7 @@ jobs:
       - name: Package Mac Apple Silicon
         if: github.event_name == 'workflow_dispatch'
         run: |
+          ./node_modules/.bin/install-electron
           ./node_modules/.bin/electron-builder --mac dmg --arm64 --publish never \
             --config.electronDist=node_modules/electron/dist --config.mac.icon=assets/jayxterm.png \
             --config.mac.identity=- --config.mac.hardenedRuntime=false --config.dmg.sign=false
