@@ -582,6 +582,19 @@ label > input {
   z-index: 20;
   font-size: 12px;
 }
+#clipboard-notice {
+  position: fixed;
+  right: 12px;
+  bottom: 42px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 20;
+}
 .side-modes {
   display: flex;
   margin: 12px 12px 8px;

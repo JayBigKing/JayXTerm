@@ -27,6 +27,7 @@ jobs:
         run: ./scripts/windows.ps1 test
       - name: Windows application smoke test
         env:
+          JAYXTERM_CLIPBOARD_QA: '1'
           JAYXTERM_LOCAL_DRAG_QA: '1'
           JAYXTERM_WORKSPACE_QA: '1'
           JAYXTERM_SESSION_EXCHANGE_QA: '1'

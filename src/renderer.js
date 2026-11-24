@@ -35,6 +35,8 @@ let defaultEncoding = terminalDefaults.defaultEncoding;
 let highlightKeywords = false;
 let quickPasswordsEnabled = false;
 let predictiveEcho = true;
+let copyOnSelect = terminalDefaults.copyOnSelect;
+let ctrlVPaste = terminalDefaults.ctrlVPaste;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -46,6 +48,13 @@ function toast(message) {
   $("#toast").style.display = "block";
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => ($("#toast").style.display = "none"), 6000);
+}
+function copiedNotice(text) {
+  const notice = $("#clipboard-notice");
+  notice.textContent = `已复制 ${Array.from(text).length} 字符`;
+  notice.hidden = false;
+  clearTimeout(copiedNotice.timer);
+  copiedNotice.timer = setTimeout(() => { notice.hidden = true; }, 1800);
 }
 function renderBackground(color) {
   theme = applyTheme(color);
@@ -106,6 +115,8 @@ function updateSettings(settings) {
     if (quickPasswordsEnabled) quickPasswords.activate();
   }
   predictiveEcho = settings.predictiveEcho;
+  copyOnSelect = settings.copyOnSelect;
+  ctrlVPaste = settings.ctrlVPaste;
   for (const tab of tabs.values()) tab.echo.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
@@ -473,24 +484,27 @@ async function duplicateTab(tab) {
     tab.duplicating = false;
   }
 }
-async function terminalClipboard(t, action) {
-  if (!t || !tabs.has(t.id) || t.moving) return;
+async function terminalClipboard(t, action, automatic = false) {
+  if (!t || tabs.get(t.id) !== t || t.moving) return;
   try {
     if (action === "copy") {
       const text = t.term.getSelection();
-      if (text) await api.writeClipboard(text);
+      if (text) {
+        await api.writeClipboard(text);
+        if (automatic) copiedNotice(text);
+      }
     } else if (action === "paste") {
-      if (t.state !== "已连接") return;
+      if (t.state !== "已连接" || t.term.options.disableStdin) return;
       const text = await api.readClipboard();
-      if (!tabs.has(t.id) || t.moving || t.term.options.disableStdin) return;
+      if (tabs.get(t.id) !== t || t.moving || t.state !== "已连接" || t.term.options.disableStdin) return;
       // xterm's paste API honors bracketed-paste mode and normalizes line breaks.
       // It uses the same onData path as typing, including GBK input conversion.
-      if (text) {
+      if (typeof text === "string" && text) {
         t.term.clearSelection();
         t.term.paste(text);
       }
     } else if (action === "select-all") t.term.selectAll();
-    t.term.focus();
+    if (!automatic && tabs.get(t.id) === t) t.term.focus();
   } catch (error) {
     toast(error.message);
   }
@@ -556,14 +570,36 @@ function createTerminal(session, id, { moving = false } = {}) {
     if (current !== id && !fileWorkspaceOpen && tab.group.shown === id)
       activate(id, false);
   });
-  // Clipboard operations are available only through the terminal context menu.
-  // Keep ordinary terminal keys (Ctrl+C, Vim Ctrl+V, etc.) untouched.
+  // Handle clipboard access explicitly to avoid a second browser paste and
+  // preserve Ctrl+C and, when its paste setting is off, terminal Ctrl+V.
   const blockBrowserClipboard = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   pane.addEventListener("copy", blockBrowserClipboard, true);
   pane.addEventListener("paste", blockBrowserClipboard, true);
+  term.attachCustomKeyEventHandler((event) => {
+    if (!ctrlVPaste || !event.ctrlKey || event.shiftKey || event.altKey || event.metaKey ||
+        event.isComposing || event.key.toLowerCase() !== "v") return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "keydown" && !event.repeat) void terminalClipboard(tab, "paste");
+    return false;
+  });
+  // Copy only a mouse selection, after xterm has handled mouseup on document.
+  // Programmatic selections (search, restored tabs, output) must not copy.
+  tab.clipboardEvents = new AbortController();
+  const { signal } = tab.clipboardEvents;
+  let selecting = false;
+  pane.addEventListener("mousedown", (event) => {
+    if (event.button === 0 && event.target.closest(".xterm-screen")) selecting = true;
+  }, { capture: true, signal });
+  window.addEventListener("mouseup", (event) => {
+    if (event.button !== 0 || !selecting) return;
+    selecting = false;
+    if (copyOnSelect) void terminalClipboard(tab, "copy", true);
+  }, { signal });
+  window.addEventListener("blur", () => { selecting = false; }, { signal });
   pane.oncontextmenu = (event) => {
     event.preventDefault();
     api
@@ -840,6 +876,7 @@ function closeTab(id, disconnect = true) {
   t.highlights?.dispose();
   t.passwordPrompt?.dispose();
   t.echo.dispose();
+  t.clipboardEvents.abort();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
