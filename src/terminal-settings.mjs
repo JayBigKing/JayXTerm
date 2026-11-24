@@ -3,7 +3,9 @@ export const terminalDefaults = {
   cjkFontFamily: "",
   fontSize: 14,
   defaultEncoding: "utf-8",
-  highlightKeywords: true,
+  highlightKeywords: false,
+  terminalSearchEnabled: false,
+  quickPasswordsEnabled: false,
   predictiveEcho: true,
 };
 export const terminalEncodings = ["utf-8", "gbk", "gb2312"];

@@ -15,7 +15,7 @@ async function waitFor(check, message) {
 }
 const js = (window, source) => window.webContents.executeJavaScript(source);
 async function check(window, source) {
-  const nativeDrag = await js(window, "window.api.localDragAvailable()");
+  const nativeDrag = (await js(window, "window.api.localDragAvailable()")) === true;
   const relayTarget = path.resolve(".codex-cache/qa/local-drag-relay-target");
   const dragLog = path.resolve(".codex-cache/qa/local-drag.jsonl");
   const previousDrags = nativeDrag && fs.existsSync(dragLog)
@@ -85,7 +85,7 @@ async function check(window, source) {
       const row=[...document.querySelectorAll('#file-list .file-row')].find(r=>r.textContent.includes('测试 relay:latest.bin'));
       const data=new DataTransfer();
       row.dispatchEvent(new DragEvent('dragstart',{bubbles:true,cancelable:true,dataTransfer:data}));
-      return data.getData('text/plain');
+      return 'jayxterm-sftp:' + data.getData('application/x-jayxterm-sftp');
     })()`,
     );
     assert.ok(token.startsWith("jayxterm-sftp:"));

@@ -76,11 +76,41 @@ function prepareCache(destination, source) {
     if (!keepBackup) fs.rmSync(staging, { recursive: true, force: true });
   }
 }
+function readLocalState(file) {
+  try {
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    return state && typeof state === "object" && !Array.isArray(state) ? state : null;
+  } catch (error) {
+    return error.code === "ENOENT" ? {} : null;
+  }
+}
+function restoreLegacyWindowsKey(defaultCache, legacyCache) {
+  const defaultFile = path.join(defaultCache, "Local State");
+  const state = readLocalState(defaultFile);
+  if (!state || Object.hasOwn(state.os_crypt ?? {}, "encrypted_key")) return;
+  const encryptedKey = readLocalState(path.join(legacyCache, "Local State"))?.os_crypt?.encrypted_key;
+  // Chromium stores the AES key in a DPAPI envelope. Preserve it as-is.
+  if (typeof encryptedKey !== "string") return;
+  const envelope = Buffer.from(encryptedKey, "base64");
+  if (envelope.length <= 5 || envelope.toString("ascii", 0, 5) !== "DPAPI") return;
+  fs.mkdirSync(defaultCache, { recursive: true });
+  const staging = path.join(defaultCache, ".jayxterm-local-state-" + randomUUID());
+  try {
+    fs.writeFileSync(staging, JSON.stringify({
+      ...state, os_crypt: { ...state.os_crypt, encrypted_key: encryptedKey },
+    }), { mode: 0o600, flag: "wx" });
+    fs.renameSync(staging, defaultFile);
+  } finally {
+    fs.rmSync(staging, { force: true });
+  }
+}
 function mask(secret) {
   const chars = Array.from(secret);
   if (chars.length <= 6) return "*".repeat(Math.max(3, chars.length));
   return chars.slice(0, 2).join("") + "*".repeat(Math.min(chars.length - 4, 12)) + chars.slice(-2).join("");
 }
+
+const terminalToggles = ["highlightKeywords", "terminalSearchEnabled", "quickPasswordsEnabled", "predictiveEcho"];
 
 function openAppSettings(file, defaultCache, safeStorage) {
   const store = openStore(file, defaults);
@@ -95,8 +125,8 @@ function openAppSettings(file, defaultCache, safeStorage) {
     if (!validCjkFontFamily(data.cjkFontFamily)) data.cjkFontFamily = terminalDefaults.cjkFontFamily;
     if (!validFontSize(data.fontSize)) data.fontSize = terminalDefaults.fontSize;
     if (!terminalEncodings.includes(data.defaultEncoding)) data.defaultEncoding = terminalDefaults.defaultEncoding;
-    if (typeof data.highlightKeywords !== "boolean") data.highlightKeywords = true;
-    if (typeof data.predictiveEcho !== "boolean") data.predictiveEcho = true;
+    for (const name of terminalToggles)
+      if (typeof data[name] !== "boolean") data[name] = terminalDefaults[name];
     // Earlier releases persisted the default whenever any setting was saved.
     if (!Object.hasOwn(saved, "workspaceBackground") && validBackground(previousBackground) &&
         previousBackground.toLowerCase() !== "#eff1f5")
@@ -123,8 +153,15 @@ function openAppSettings(file, defaultCache, safeStorage) {
     return index;
   }
   return {
-    initializeCache() {
+    initializeCache({ restoreWindowsKey = false } = {}) {
       const data = settings();
+      if (restoreWindowsKey && data.cachePath) {
+        try {
+          restoreLegacyWindowsKey(defaultCache, data.cachePath);
+        } catch {
+          console.error("JayXTerm could not restore the Windows encryption key from the old cache directory.");
+        }
+      }
       if (data.pendingCache) {
         const { path: next, migrate } = data.pendingCache;
         try {
@@ -151,23 +188,28 @@ function openAppSettings(file, defaultCache, safeStorage) {
     },
     describe() {
       const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground,
-        fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, predictiveEcho } = settings();
+        fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, terminalSearchEnabled, quickPasswordsEnabled,
+        predictiveEcho } = settings();
       return {
         cachePath, pendingCache: pendingCache?.path ?? null, cacheError, saveHistory, fileOpen, defaultCache,
         backgroundColor: validBackground(workspaceBackground) ? workspaceBackground : defaultBackground,
         defaultBackground,
-        fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, predictiveEcho,
+        fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, terminalSearchEnabled, quickPasswordsEnabled,
+        predictiveEcho,
       };
     },
-    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, predictiveEcho }) {
+    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, cjkFontFamily, fontSize, defaultEncoding, ...toggles }) {
       if ((fontFamily !== undefined && !validFontFamily(fontFamily)) ||
           (cjkFontFamily !== undefined && !validCjkFontFamily(cjkFontFamily)) ||
           (fontSize !== undefined && !validFontSize(fontSize)) ||
-          (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)) ||
-          (highlightKeywords !== undefined && typeof highlightKeywords !== "boolean") ||
-          (predictiveEcho !== undefined && typeof predictiveEcho !== "boolean"))
+          (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)))
         throw new Error("无效的终端设置：字号范围为 8–48，编码为 UTF-8、GBK 或 GB2312");
       const data = settings();
+      for (const name of terminalToggles) {
+        if (toggles[name] === undefined) continue;
+        if (typeof toggles[name] !== "boolean") throw new Error("无效的终端功能开关");
+        data[name] = toggles[name];
+      }
       if (saveHistory && !data.saveHistory && !available())
         throw new Error("系统安全存储不可用，无法启用密码历史");
       const previous = data.pendingCache?.path ?? data.cachePath;
@@ -184,8 +226,6 @@ function openAppSettings(file, defaultCache, safeStorage) {
       if (cjkFontFamily !== undefined) data.cjkFontFamily = cjkFontFamily.trim();
       if (fontSize !== undefined) data.fontSize = fontSize;
       if (defaultEncoding !== undefined) data.defaultEncoding = defaultEncoding;
-      if (highlightKeywords !== undefined) data.highlightKeywords = highlightKeywords;
-      if (predictiveEcho !== undefined) data.predictiveEcho = predictiveEcho;
       if (validBackground(backgroundColor))
         data.workspaceBackground = backgroundColor.toLowerCase() === defaultBackground ? null : backgroundColor;
       store.write(data);

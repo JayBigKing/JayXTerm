@@ -25,6 +25,12 @@ async function check(win, fixture) {
       throw new Error('Quick passwords timed out: ' + (label || check) + ' / ' + $('#quick-password-error').textContent + ' / ' + $('#vault-note').textContent);
     };
     const pickerOpen = () => $('#quick-password-picker').matches(':popover-open');
+    const enableVault = async enabled => {
+      $('#settings-open').click(); await wait(() => $('#settings-dialog').open);
+      const form = $('#settings-form');
+      form.elements.quickPasswordsEnabled.checked = enabled;
+      form.requestSubmit(); await wait(() => !$('#settings-dialog').open);
+    };
     ${code}
   })()`);
   const source = await run("return $('.tab.active').dataset.connection;");
@@ -33,6 +39,9 @@ async function check(win, fixture) {
   const showMessageBox = dialog.showMessageBox;
   let other, entries = [], temporarySession, completed = false;
   try {
+    assert.equal(await run("return $('#terminal-passwords').checkVisibility();"), false);
+    assert.match(await run("return await api.quickPasswords().then(() => '', error => error.message);"), /已关闭/);
+    await run("await enableVault(true);");
     console.log("Checking named password management and encrypted persistence");
     await run(`$('#settings-open').click(); await wait(() => $('#settings-dialog').open); $('#settings-tab-passwords').click();
       $('#vault-add').click(); $('#quick-password-description').value = '虚拟机1'; $('#quick-password-secret').value = 'qa-password';
@@ -197,6 +206,26 @@ async function check(win, fixture) {
     stream.write("\r\nPassword: ");
     await run("await wait(pickerOpen, 'next password prompt after scrollback trimming'); $('#quick-password-picker-close').click();");
 
+    await run(`await enableVault(false);
+      if ($('#terminal-passwords').checkVisibility()) throw new Error('Terminal password button remained visible');
+      $('#new').click();
+      $('#session-form').elements.password.focus();
+      if ($('#session-quick-password').checkVisibility() || pickerOpen()) throw new Error('Session form still offered the vault');
+      $('#editor-cancel').click();
+      $('.terminal-pane.active .xterm-helper-textarea').focus();`);
+    stream.write("\r\nPassword: ");
+    await run(`await wait(() => $('.terminal-pane.active .xterm-rows > div:last-child').textContent.includes('Password:') ||
+      [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')].some(row => row.textContent.includes('Password:')));`);
+    await pause(150);
+    assert.equal(await run("return pickerOpen();"), false);
+    const disabledStart = fixture.inputs.length;
+    press("Up");
+    await waitFor(() => fixture.inputs.length > disabledStart);
+    assert.match(Buffer.concat(fixture.inputs.slice(disabledStart)).toString(), /^\x1b[\[O]A$/);
+    stream.write("\r\nuser@server:~$ ");
+    await run("await enableVault(true);");
+    assert.equal((await run("return await api.quickPasswords();")).items.length, 2, "Turning off the vault must keep its encrypted records");
+
     dialog.showMessageBox = async () => ({ response: 0 });
     await run("$('#settings-open').click(); await wait(() => $('#settings-dialog').open); $('#settings-tab-passwords').click(); await wait(() => document.querySelectorAll('.vault-row').length === 2); $('.vault-remove').click();");
     await pause(100);
@@ -220,6 +249,7 @@ async function check(win, fixture) {
       $('#terminal-encoding').value = ${JSON.stringify(previousEncoding)}; $('#terminal-encoding').dispatchEvent(new Event('change')); await wait(() => !$('#terminal-encoding').disabled);`);
     if (temporarySession) await run(`await api.remove(${JSON.stringify(temporarySession.id)});`);
     for (const entry of entries) await run(`await api.removeQuickPassword(${JSON.stringify(entry.id)}).catch(() => {});`);
+    await run("await enableVault(false);");
     dialog.showMessageBox = showMessageBox;
     stream.write("\r\n");
   }
