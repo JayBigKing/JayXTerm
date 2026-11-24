@@ -3,8 +3,8 @@ export const terminalDefaults = {
   cjkFontFamily: "",
   fontSize: 14,
   defaultEncoding: "utf-8",
-  highlightKeywords: false,
-  terminalSearchEnabled: false,
+  highlightKeywords: true,
+  terminalSearchEnabled: true,
   quickPasswordsEnabled: false,
   predictiveEcho: true,
 };

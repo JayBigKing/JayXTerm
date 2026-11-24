@@ -67,8 +67,8 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(initial.cjkFontFamily, "");
   assert.equal(initial.fontSize, 14);
   assert.equal(initial.defaultEncoding, "utf-8");
-  assert.equal(initial.highlightKeywords, false);
-  assert.equal(initial.terminalSearchEnabled, false);
+  assert.equal(initial.highlightKeywords, true);
+  assert.equal(initial.terminalSearchEnabled, true);
   assert.equal(initial.quickPasswordsEnabled, false);
   assert.equal(initial.predictiveEcho, true);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
@@ -103,6 +103,8 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   fs.writeFileSync(file, JSON.stringify({ fontFamily: "Consolas", fontSize: 16 }));
   assert.equal(open().describe().fontFamily, "Consolas");
   assert.equal(open().describe().cjkFontFamily, "");
+  assert.equal(open().describe().highlightKeywords, true);
+  assert.equal(open().describe().terminalSearchEnabled, true);
   fs.writeFileSync(file, JSON.stringify({ fontSize: -1, fontFamily: null, defaultEncoding: "invalid" }));
   assert.equal(open().describe().fontSize, 14);
   assert.equal(open().describe().fontFamily, "Cascadia Mono");
