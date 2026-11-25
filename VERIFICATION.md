@@ -1,5 +1,12 @@
 # 初版验证记录
 
+## 2026-11-25：终端断线重连
+
+- `npm test` 的 41 项测试及 `npm run build` 通过。
+- macOS 使用本地 SSH/SFTP 服务运行真实 Electron 验收：断开和认证失败时显示标签刷新按钮，点击图标、双击标签、双击终端内容均可重连；已连接时双击不重连，连续点击只建立一次连接。
+- 新增 `scripts/reconnect-check.cjs` 并纳入常规 smoke。覆盖后台标签原位替换、相邻标签顺序、分屏及焦点保留、GBK 输入输出、SFTP 恢复、旧连接迟到事件隔离、取消密码后再次输入，以及重连请求期间关闭标签后不会重新打开或遗留连接。
+- `JAYXTERM_WORKSPACE_QA=1 JAYXTERM_MULTIWINDOW_QA=1 JAYXTERM_CLIPBOARD_QA=1 JAYXTERM_FEATURES_QA=1 ./node_modules/.bin/electron scripts/smoke.cjs` 通过，包含分屏、多窗口移动、剪贴板和复制会话回归。Windows 实机交互未在本次本地验证中运行，常规 smoke 已接入现有 Windows CI。
+
 ## 2026-11-23：Windows 拖动状态释放与高延迟输入
 
 - 真实 Windows 鼠标复现：无窗口的独立辅助进程进入 OLE 拖动后，线程未接入源窗口输入队列，无法收到松键和 Esc，主进程一直保留传输占用。抓取辅助线程栈确认停在 `DoDragDrop` 消息循环。仅在同步拖动期间通过 `AttachThreadInput` 连接前台源窗口队列，返回后立即解除。

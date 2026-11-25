@@ -357,6 +357,7 @@ app.whenReady().then(async () => {
         w,
         fixture,
       );
+    await runCheck("terminal reconnect", "./reconnect-check.cjs", w);
     markStage("cleanup");
     await w.webContents.executeJavaScript(
       `(()=>{for(const button of document.querySelectorAll('.tab .close'))button.click();})()`,

@@ -442,26 +442,49 @@ $("#password-cancel").onclick = () => {
   passwordResolve?.(null);
   passwordResolve = null;
 };
-async function connect(session) {
-  let password;
-  if (!session.hasPassword) {
-    $("#password-host").textContent = `${session.username}@${session.host}`;
-    $("#connect-password").value = "";
-    $("#password-dialog").showModal();
-    loadConnectHistory();
-    password = await new Promise((r) => (passwordResolve = r));
-    if (password === null) return;
-  }
+async function connect(session, replacing = null) {
   try {
+    let password;
+    if (!session.hasPassword) {
+      if ($("#password-dialog").open) return;
+      $("#password-host").textContent = `${session.username}@${session.host}`;
+      $("#connect-password").value = "";
+      $("#password-dialog").showModal();
+      loadConnectHistory();
+      password = await new Promise((r) => (passwordResolve = r));
+      if (password === null) return;
+    }
+    if (replacing && tabs.get(replacing.id) !== replacing) return;
     const id = await api.connect({
       sessionId: session.id,
       password,
-      cols: 100,
-      rows: 30,
+      encoding: session.encoding,
+      cols: replacing?.term.cols || 100,
+      rows: replacing?.term.rows || 30,
     });
-    createTerminal(session, id);
+    // Closing a tab while its connection request is pending must not reopen it.
+    if (replacing && tabs.get(replacing.id) !== replacing) {
+      api.send({ type: "disconnect", id });
+      return;
+    }
+    createTerminal(session, id, { replacing });
   } catch (e) {
     toast(e.message);
+  }
+}
+function isDisconnected(tab) {
+  return tab.state === "已断开" || tab.state === "连接出错";
+}
+async function reconnectTab(tab) {
+  if (tabs.get(tab.id) !== tab || tab.moving || tab.reconnecting || !isDisconnected(tab)) return;
+  tab.reconnecting = true;
+  renderTabs();
+  try {
+    const session = sessions.find((session) => session.id === tab.session.id) || tab.session;
+    await connect({ ...session, encoding: tab.encoding }, tab);
+  } finally {
+    tab.reconnecting = false;
+    renderTabs();
   }
 }
 async function duplicateTab(tab) {
@@ -509,11 +532,11 @@ async function terminalClipboard(t, action, automatic = false) {
     toast(error.message);
   }
 }
-function createTerminal(session, id, { moving = false } = {}) {
+function createTerminal(session, id, { moving = false, replacing = null } = {}) {
   const pane = el("div", "terminal-pane");
   const viewport = el("div", "terminal-viewport");
   pane.append(viewport);
-  const group = focusedGroup || addGroup();
+  const group = replacing?.group || focusedGroup || addGroup();
   group.body.append(pane);
   const term = new Terminal({
     ...fontOptions,
@@ -570,6 +593,9 @@ function createTerminal(session, id, { moving = false } = {}) {
     if (current !== id && !fileWorkspaceOpen && tab.group.shown === id)
       activate(id, false);
   });
+  pane.addEventListener("dblclick", (event) => {
+    if (event.button === 0) void reconnectTab(tab);
+  });
   // Handle clipboard access explicitly to avoid a second browser paste and
   // preserve Ctrl+C and, when its paste setting is off, terminal Ctrl+V.
   const blockBrowserClipboard = (event) => {
@@ -619,9 +645,23 @@ function createTerminal(session, id, { moving = false } = {}) {
     ({ cols, rows }) =>
       !tab.moving && api.send({ type: "resize", id, cols, rows }),
   );
+  if (replacing) {
+    // Replace the old terminal in place, including an inactive tab in another
+    // split. A fresh connection ID keeps late SSH/SFTP events on the old tab.
+    replacing.pane.before(pane);
+    tab.header = createTabElement(tab);
+    replacing.header.element.before(tab.header.element);
+    if (group.shown === replacing.id) group.shown = id;
+    if (current === replacing.id) current = id;
+    closeTab(replacing.id);
+  }
   if (!moving) {
-    activate(id);
-    setMode("files");
+    if (!replacing || current === id) {
+      activate(id);
+      setMode("files");
+    } else {
+      requestAnimationFrame(() => fitTerminal(tab));
+    }
     term.writeln("\x1b[32m正在连接 " + session.host + "…\x1b[0m");
   }
   return tab;
@@ -754,17 +794,28 @@ function createTabElement(tab) {
   const element = el("div", "tab");
   const select = el("button", "tab-select");
   const label = el("span", "tab-name", tab.session.name);
+  const reconnect = el("button", "tab-reconnect", "↻");
   const close = el("button", "close", "×");
-  select.type = close.type = "button";
+  select.type = reconnect.type = close.type = "button";
   select.append(el("span", "dot"), label);
+  reconnect.title = "重新连接";
+  reconnect.setAttribute("aria-label", "重新连接 " + tab.session.name);
+  reconnect.onclick = (event) => {
+    event.stopPropagation();
+    void reconnectTab(tab);
+  };
   close.title = "关闭连接";
   close.setAttribute("aria-label", "关闭 " + tab.session.name);
   close.onclick = (event) => {
     event.stopPropagation();
     closeTab(tab.id);
   };
-  element.append(select, close);
+  element.append(select, reconnect, close);
   element.onclick = () => activate(tab.id);
+  element.ondblclick = (event) => {
+    if (event.button === 0 && !event.target.closest(".close, .tab-reconnect"))
+      void reconnectTab(tab);
+  };
   element.oncontextmenu = (event) => {
     event.preventDefault();
     api.tabMenu(tab.id).catch((error) => toast(error.message));
@@ -779,26 +830,31 @@ function createTabElement(tab) {
     }
   };
   element.dataset.connection = tab.id;
-  element.title = tab.session.name + " · 可拖到其他分屏";
   element.ondragstart = (event) => {
-    if (tab.moving || event.target.closest(".close")) {
+    if (tab.moving || tab.reconnecting || event.target.closest(".close, .tab-reconnect")) {
       event.preventDefault();
       return;
     }
     event.dataTransfer.setData(terminalDragType, tab.id);
     event.dataTransfer.effectAllowed = "move";
   };
-  return { element, select };
+  return { element, select, reconnect };
 }
 function renderTabs() {
   for (const tab of tabs.values()) {
     tab.header ??= createTabElement(tab);
-    const { element, select } = tab.header;
+    const { element, select, reconnect } = tab.header;
     if (element.parentElement !== tab.group.nav) tab.group.nav.append(element);
     const visible = tab.group.shown === tab.id;
+    const disconnected = isDisconnected(tab);
     element.classList.toggle("active", visible);
+    element.classList.toggle("disconnected", disconnected);
+    element.title = `${tab.session.name} · ${tab.state} · ` +
+      (disconnected ? "点击 ↻ 或双击重新连接" : "可拖到其他分屏");
     select.setAttribute("aria-pressed", String(visible));
-    element.draggable = !tab.moving;
+    reconnect.hidden = !disconnected;
+    reconnect.disabled = tab.moving || !!tab.reconnecting;
+    element.draggable = !tab.moving && !tab.reconnecting;
   }
 }
 function fitTerminal(t) {
@@ -926,6 +982,7 @@ api.onEvent((m) => {
     });
   } else if (m.type === "ready") {
     t.state = "已连接";
+    renderTabs();
     fitTerminal(t);
     loadFiles(t, m.directory || ".");
     if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
@@ -934,12 +991,15 @@ api.onEvent((m) => {
     t.echo.reset();
     clearCwdQuery(t);
     t.state = m.type === "closed" ? "已断开" : "连接出错";
+    renderTabs();
     quickPasswords.activate();
     if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
     t.term.writeln("\r\n\x1b[31m" + (m.message || "连接已关闭") + "\x1b[0m");
-    if (current === t.id)
+    if (current === t.id) {
+      $("#move-tab").disabled = true;
       $("#status").textContent =
         `${t.session.username}@${t.session.host} · ${t.state}`;
+    }
   } else if (m.type === "progress" && (t.transferring || t.localDragging)) {
     const text = `${m.files || 0} 个文件完成 · ${m.name?.split("/").pop() || ""} ${m.total ? Math.round((m.current / m.total) * 100) : 0}%`;
     showTransfer(t, text);

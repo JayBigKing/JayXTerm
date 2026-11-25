@@ -291,6 +291,9 @@ main {
 .tab-select .dot {
   flex-shrink: 0;
 }
+.tab.disconnected .dot {
+  background: var(--muted);
+}
 .tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -299,6 +302,14 @@ main {
 .tab .close {
   flex-shrink: 0;
   color: var(--muted);
+}
+.tab .tab-reconnect {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  font-size: 16px;
+}
+.tab-reconnect[hidden] {
+  display: none;
 }
 .tab button:hover {
   background: var(--hover);

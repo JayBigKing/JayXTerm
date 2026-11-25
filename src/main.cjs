@@ -518,12 +518,13 @@ ipcMain.handle("sessions:delete", (e, id) => {
   workspace.broadcast({ type: "sessions-changed" }, e.sender.id);
   return safeSessions();
 });
-ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows }) => {
+ipcMain.handle("ssh:connect", (e, { sessionId, password, encoding, cols, rows }) => {
   const s = store.get().sessions.find((s) => s.id === sessionId);
   if (!s) throw new Error("会话不存在");
   const id = randomUUID();
   const secret = password || decryptSessionPassword(s.password);
-  active.set(id, s);
+  const config = { ...s, encoding: normalizeEncoding(encoding ?? s.encoding) };
+  active.set(id, config);
   owners.set(id, e.sender.id);
   states.set(id, "connecting");
   if (password && appSettings.describe().saveHistory) pendingPasswords.set(id, password);
@@ -534,7 +535,7 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows }) => {
       host: s.host,
       port: s.port,
       username: s.username,
-      encoding: s.encoding || "utf-8",
+      encoding: config.encoding,
     },
     password: secret,
     cols,
