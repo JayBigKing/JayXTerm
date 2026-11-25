@@ -156,6 +156,15 @@ cmp -s "$HOSTS" "$1/expected" || exit 14
 ''')
         self.assertIn(b":: openai.com # tun-guard\n", hosts)
 
+    def test_list_lost_while_tun_up_still_blocks_later_shutdown(self):
+        hosts = self.run_commands('''sync_state
+rm "$CONF"
+printf down > "$STATEFILE"
+sync_state
+''')
+        self.assertIn(b"0.0.0.0 openai.com # tun-guard\n", hosts)
+        self.assertIn(b":: openai.com # tun-guard\n", hosts)
+
     def test_valid_list_changes_and_tun_enable_restore_hosts(self):
         hosts = self.run_commands('''printf down > "$STATEFILE"
 sync_state

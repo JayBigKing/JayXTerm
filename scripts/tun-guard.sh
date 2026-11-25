@@ -116,11 +116,11 @@ unblock() {
 
 sync_state() {
   local cur
+  refresh_domains                    # TUN 开启时也记住清单，供误删后继续保护
   if tun_up; then
     has_block && unblock
     return 0
   fi
-  refresh_domains
   if [ -z "$WANT" ]; then
     # 尚未读到有效清单时保留现有屏蔽，避免清单丢失导致意外放行。
     return 0
