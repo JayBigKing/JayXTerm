@@ -386,6 +386,10 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.error(`Application smoke test failed during: ${stage}`);
     console.error(e);
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const detail = `${stage}: ${e.message}`.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+      console.error(`::error::${detail}`);
+    }
     clearTimeout(deadline);
     app.exit(1);
   }
