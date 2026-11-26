@@ -7,7 +7,11 @@ async function check(win, fixture) {
     const wait = async condition => {
       const deadline = Date.now() + 10000;
       while (!condition()) {
-        if (Date.now() > deadline) throw Error('Local terminal timed out: ' + condition + ' / ' + $('#status').textContent + ' / ' + $('#toast').textContent);
+        if (Date.now() > deadline) {
+          const rows = [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')];
+          const output = rows.map(row => row.textContent.trim()).filter(Boolean).slice(-8).join(' | ');
+          throw Error('Local terminal timed out: ' + condition + ' / ' + $('#status').textContent + ' / Recent output: ' + output);
+        }
         await new Promise(resolve => setTimeout(resolve, 25));
       }
     };
@@ -68,11 +72,17 @@ async function check(win, fixture) {
       await seeLine(dimensions);
       win.webContents.setZoomFactor(zoom);
     }
-    await enter(cmd ? "echo JAYXTERM_INTERRUPT_READY&&ping -t 127.0.0.1" : "echo JAYXTERM_INTERRUPT_READY; sleep 25");
+    // Let the foreground process acknowledge readiness after installing its
+    // handler. Keep follow-up input out of the PTY until the Shell resumes.
+    const interruptProbe = "const timer = setTimeout(() => { process.exitCode = 1; }, 25000); " +
+      "process.once('SIGINT', () => { clearTimeout(timer); process.stdout.write('\\nJAYXTERM_' + 'INTERRUPTED\\n'); }); " +
+      "console.log('JAYXTERM_' + 'INTERRUPT_READY');";
+    const resumed = cmd ? "echo JAYXTERM_%OS%_RESUMED" : "printf '%s%s\\n' JAYXTERM_ RESUMED";
+    await enter(`node -e "${interruptProbe}" && ${resumed}`);
     await seeLine("JAYXTERM_INTERRUPT_READY");
     keystroke("C", ["control"]);
-    await enter(cmd ? "echo JAYXTERM_%OS%_INTERRUPTED" : "printf '%s%s\\n' JAYXTERM_ INTERRUPTED");
-    await seeLine(cmd ? "JAYXTERM_Windows_NT_INTERRUPTED" : "JAYXTERM_INTERRUPTED");
+    await seeLine("JAYXTERM_INTERRUPTED");
+    await seeLine(cmd ? "JAYXTERM_Windows_NT_RESUMED" : "JAYXTERM_RESUMED");
     assert.equal(fixture.inputs.length, remoteInputCount, "Local input must stay out of SSH");
     await enter("exit");
     await run("await wait(() => $('#status').textContent.endsWith('已退出'));");

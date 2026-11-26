@@ -54,9 +54,13 @@ async function check(sourceWindow, worker) {
     `);
     const tabSelector = (id) => `.tab[data-connection="${id}"]`;
     const currentId = () => run("return $('.terminal-group.focused .tab.active')?.dataset.connection;");
-    const waitReady = () => run(`await wait(() => $('#status').textContent.includes('已连接') &&
-      $('#file-list').textContent.includes('README.md'));`);
+    const waitReady = (previousId = null) => run(`await wait(() => {
+      const tab = $('.terminal-group.focused .tab.active');
+      return tab?.dataset.connectionState === 'ready' && tab.dataset.connection !== ${JSON.stringify(previousId)} &&
+        $('#file-list').textContent.includes('README.md');
+    });`);
     const disconnect = async (id, stream) => {
+      assert.ok(stream, `Missing SSH test shell for tab ${id}`);
       stream.end();
       await run(`await wait(() => disconnected($('${tabSelector(id)}')) &&
         !$('${tabSelector(id)} .tab-reconnect').hidden);`);
@@ -82,11 +86,13 @@ async function check(sourceWindow, worker) {
     for (let index = 0; index < 4; index++) {
       if (index === 3) await run(`$('#split-add').click();
         $('.terminal-group:last-child .group-empty').click();`);
+      const previousId = (await currentId()) ?? null;
       const before = new Set(fixture.streams);
       await openSession("断线重连验收");
-      await waitReady();
+      await waitReady(previousId);
       ids.push(await currentId());
-      streams.push([...fixture.streams].find((stream) => !before.has(stream)));
+      streams.push(await waitFor(() => [...fixture.streams].find((stream) => !before.has(stream)),
+        `SSH fixture did not open shell ${index + 1}`));
     }
     const beforeConnectedClicks = fixture.authenticated;
     await run(`
