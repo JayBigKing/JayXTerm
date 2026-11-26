@@ -11,6 +11,12 @@ test("whole-window themes preserve readable text across dark, light and mid-tone
       for (const foreground of [theme.ink, theme.muted, theme.accent])
         assert.ok(contrast(background, foreground) >= 4.5, `${color}: ${foreground} on ${background}`);
     }
+    const lamps = ["ready", "connecting", "disconnected"].map(state => theme.variables[`tab-lamp-${state}`]);
+    assert.equal(new Set(lamps).size, 3);
+    for (const background of [theme.chrome, theme.variables.hover]) {
+      for (const lamp of lamps)
+        assert.ok(contrast(background, lamp) >= 3, `${color}: ${lamp} on ${background}`);
+    }
   }
   assert.equal(createTheme("invalid").background, "#394351");
   assert.equal(createTheme("#ffffff").editor.base, "vs");

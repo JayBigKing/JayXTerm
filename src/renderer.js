@@ -958,10 +958,12 @@ $("#split-add").onclick = () => {
 function createTabElement(tab) {
   const element = el("div", "tab");
   const select = el("button", "tab-select");
+  const dot = el("span", "dot");
   const label = el("span", "tab-name", tab.session.name);
   const close = el("button", "close", "×");
   select.type = close.type = "button";
-  select.append(el("span", "dot"), label);
+  dot.setAttribute("aria-hidden", "true");
+  select.append(dot, label);
   close.title = tab.local ? "关闭本地终端" : "关闭连接";
   close.setAttribute("aria-label", "关闭 " + tab.session.name);
   close.onclick = (event) => {
@@ -998,7 +1000,7 @@ function renderTabIndicator(tab) {
   if (!tab.header) return;
   const { element, select, label, close } = tab.header;
   const state = tab.state === "已连接" ? "ready" : tab.state === "连接出错" ? "error"
-    : ["已断开", "已退出"].includes(tab.state) ? "closed" : "connecting";
+    : tab.state === "已断开" ? "closed" : tab.state === "已退出" ? "exited" : "connecting";
   const status = tab.local && state === "ready" ? "运行中" : tab.state;
   element.dataset.connectionState = state;
   element.dataset.connection = tab.id;

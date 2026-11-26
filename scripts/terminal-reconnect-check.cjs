@@ -11,6 +11,14 @@ async function check(win, fixture) {
         await new Promise(resolve => setTimeout(resolve, 25));
       }
     };
+    const checkLamp = (state) => {
+      const style = getComputedStyle($('.tab.active .dot'));
+      const token = style.getPropertyValue('--tab-lamp-' + state).trim();
+      const color = token.slice(1).match(/../g).map(channel => parseInt(channel, 16));
+      if (style.width !== '8px' || style.height !== '8px' || style.boxShadow === 'none' ||
+          style.backgroundColor !== 'rgb(' + color.join(', ') + ')')
+        throw Error('Unexpected status light for ' + state);
+    };
     ${code}
   })()`);
   const stream = [...fixture.streams][0];
@@ -47,7 +55,8 @@ async function check(win, fixture) {
       window.__reconnectPane = $('.terminal-pane.active');
       window.__reconnectId = window.__reconnectHeader.dataset.connection;
       window.__reconnectColor = getComputedStyle($('.tab.active .dot')).backgroundColor;
-      if (window.__reconnectHeader.dataset.connectionState !== 'ready') throw Error('Connected tab is not green');`);
+      if (window.__reconnectHeader.dataset.connectionState !== 'ready') throw Error('Tab did not connect');
+      checkLamp('ready');`);
     await openMenu();
     assert.equal(refresh?.enabled, true, "Refresh must be available while the SSH tab is green");
     const originalId = await connectionId();
@@ -72,6 +81,7 @@ async function check(win, fixture) {
       await wait(() => $('#terminal-search-count').textContent === '1 / 1');`);
     stream.eof();
     await run(`await wait(() => $('.tab.active').dataset.connectionState === 'closed');
+      checkLamp('disconnected');
       if (getComputedStyle($('.tab.active .dot')).backgroundColor === window.__reconnectColor ||
           !$('#status').textContent.includes('已断开')) throw Error('A disconnected tab still looks connected');`);
     await openMenu();
