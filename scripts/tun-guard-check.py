@@ -165,6 +165,53 @@ sync_state
         self.assertIn(b"0.0.0.0 openai.com # tun-guard\n", hosts)
         self.assertIn(b":: openai.com # tun-guard\n", hosts)
 
+    def test_restart_with_unusable_list_and_tun_up_keeps_existing_hosts(self):
+        expected = self.run_commands('''printf down > "$STATEFILE"
+sync_state
+''')
+        for contents in (None, "", "*.invalid.example\n"):
+            with self.subTest(domains=contents):
+                (self.root / "hosts").write_bytes(expected)
+                domains = self.root / "domains"
+                if contents is None:
+                    domains.unlink()
+                else:
+                    domains.write_text(contents)
+                (self.root / "state").write_text("up")
+                # Each call starts a new process with no remembered domain list.
+                hosts = self.run_commands('''sync_state
+cp "$HOSTS" "$1/after-start"
+printf down > "$STATEFILE"
+sync_state
+''')
+                self.assertEqual((self.root / "after-start").read_bytes(), expected)
+                self.assertEqual(hosts, expected)
+
+        # Restoring a valid list enables normal unblock/reblock transitions.
+        (self.root / "domains").write_text("openai.com\n")
+        hosts = self.run_commands('''printf up > "$STATEFILE"
+sync_state
+cp "$HOSTS" "$1/after-recovery"
+printf down > "$STATEFILE"
+sync_state
+''')
+        self.assertEqual((self.root / "after-recovery").read_bytes(), self.baseline)
+        self.assertEqual(hosts, expected)
+
+    def test_remembered_list_allows_unblock_and_restores_protection(self):
+        hosts = self.run_commands('''printf down > "$STATEFILE"
+sync_state
+rm "$CONF"
+printf up > "$STATEFILE"
+sync_state
+cp "$HOSTS" "$1/while-up"
+printf down > "$STATEFILE"
+sync_state
+''')
+        self.assertEqual((self.root / "while-up").read_bytes(), self.baseline)
+        self.assertIn(b"0.0.0.0 openai.com # tun-guard\n", hosts)
+        self.assertIn(b":: openai.com # tun-guard\n", hosts)
+
     def test_valid_list_changes_and_tun_enable_restore_hosts(self):
         hosts = self.run_commands('''printf down > "$STATEFILE"
 sync_state

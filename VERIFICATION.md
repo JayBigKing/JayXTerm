@@ -1,5 +1,11 @@
 # 初版验证记录
 
+## 2026-11-26：TUN 重启后保留屏蔽
+
+- 先用新回归复现清单缺失、空文件、全无效三种情况下，TUN 开启时重启守护会清空已有 hosts 屏蔽。
+- 将有效清单检查放在 TUN 放行之前；没有可恢复的清单时保留已有屏蔽，有内存清单或恢复有效文件后继续正常切换。
+- `/bin/bash -n scripts/tun-guard.sh` 及 `python3 scripts/tun-guard-check.py` 的 9 项测试通过。测试以独立 Bash 进程模拟重启，使用临时 hosts 和模拟 TUN 状态，不修改系统 hosts 或 DNS。
+
 ## 2026-11-25：终端断线重连
 
 - `npm test` 的 41 项测试及 `npm run build` 通过。
