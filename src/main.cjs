@@ -15,6 +15,7 @@ const fs = require("node:fs/promises");
 const { safeName, validateRemoteRemoval } = require("./transfers.cjs");
 const { installEditorWindows } = require("./editor-windows.cjs");
 const { installLocalDrag } = require("./local-drag.cjs");
+const { installLocalTerminals } = require("./local-terminals.cjs");
 const { existsSync } = require("node:fs");
 const { fork } = require("node:child_process");
 const { randomUUID } = require("node:crypto");
@@ -46,7 +47,7 @@ if (!app.isPackaged) {
     ),
   );
 }
-let window, worker, store, workspace;
+let window, worker, store, workspace, localTerminals;
 const owners = new Map(),
   states = new Map(),
   busyTransfers = new Set();
@@ -73,6 +74,7 @@ let passwordVault;
 const active = new Map(),
   requests = new Map();
 const pendingPasswords = new Map();
+const preparedConnections = new Map();
 const tests = new Map();
 const remoteDrags = new Map();
 function decryptSessionPassword(encrypted) {
@@ -132,10 +134,12 @@ app.whenReady().then(() => {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
+  localTerminals = installLocalTerminals({ ipcMain, settings: appSettings, isWorkspace: id => workspace?.get(id) });
   workspace = createWindows({
     active,
     owners,
     states,
+    localTerminals,
     send,
     request,
     background: () => appSettings.describe().backgroundColor,
@@ -144,6 +148,7 @@ app.whenReady().then(() => {
     onDisconnect: (id) => {
       active.delete(id);
       pendingPasswords.delete(id);
+      preparedConnections.delete(id);
       states.delete(id);
       if (tests.has(id)) finishTest(id, "窗口已关闭");
     },
@@ -256,6 +261,7 @@ app.whenReady().then(() => {
     }
     active.clear();
     pendingPasswords.clear();
+    preparedConnections.clear();
     for (const id of tests.keys()) finishTest(id, "SSH 后台进程已退出");
     for (const r of requests.values()) {
       clearTimeout(r.timer);
@@ -271,7 +277,7 @@ ipcMain.handle("clipboard:write", (_e, text) => {
   clipboard.writeText(text);
 });
 ipcMain.handle("clipboard:menu", (e, { id, hasSelection, canPaste }) => {
-  workspace.assertOwner(e.sender, id);
+  if (!localTerminals.owns(e.sender, id)) workspace.assertOwner(e.sender, id);
   const win = workspace.get(e.sender.id);
   const act = (action) => {
     if (win && !win.isDestroyed())
@@ -526,9 +532,14 @@ ipcMain.handle("sessions:delete", (e, id) => {
   workspace.broadcast({ type: "sessions-changed" }, e.sender.id);
   return safeSessions();
 });
-ipcMain.handle("ssh:connect", (e, { sessionId, password, encoding, cols, rows }) => {
-  // Reject before allocating an ID so the renderer retains the disconnected tab.
+ipcMain.handle("ssh:connect", (e, { sessionId, password, encoding, cols, rows, replacing }) => {
   requireWorker();
+  if (replacing) {
+    ensureOwner(e.sender, replacing);
+    const state = states.get(replacing);
+    if (!["ready", "closed", "error"].includes(state)) throw new Error("请等待当前连接结束后重连");
+    if (state === "ready" && busyTransfers.has(replacing)) throw new Error("请等待当前文件操作结束后重连");
+  }
   const s = store.get().sessions.find((s) => s.id === sessionId);
   if (!s) throw new Error("会话不存在");
   const id = randomUUID();
@@ -538,7 +549,7 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, encoding, cols, rows })
   owners.set(id, e.sender.id);
   states.set(id, "connecting");
   if (password && appSettings.describe().saveHistory) pendingPasswords.set(id, password);
-  send({
+  const connection = {
     type: "connect",
     id,
     config: {
@@ -550,10 +561,21 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, encoding, cols, rows })
     password: secret,
     cols,
     rows,
-  });
+  };
+  // A refreshed tab must be bound to its new ID before worker events can arrive.
+  if (replacing) preparedConnections.set(id, connection);
+  else send(connection);
   return id;
 });
 ipcMain.on("ssh:send", (e, m) => {
+  if (m.type === "start" && owners.get(m.id) === e.sender.id) {
+    const connection = preparedConnections.get(m.id);
+    if (connection) {
+      preparedConnections.delete(m.id);
+      send(connection);
+    }
+    return;
+  }
   if (
     m.type === "disconnect" &&
     owners.get(m.id) === e.sender.id &&
@@ -563,6 +585,7 @@ ipcMain.on("ssh:send", (e, m) => {
     owners.delete(m.id);
     active.delete(m.id);
     pendingPasswords.delete(m.id);
+    preparedConnections.delete(m.id);
     states.delete(m.id);
     return;
   }

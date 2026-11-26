@@ -60,6 +60,25 @@ test("only legacy defaults follow the new workspace background", (t) => {
   settings.apply({ ...update, backgroundColor: "#394351" });
   assert.equal(open().describe().backgroundColor, "#394351");
 });
+test("shortcuts support an unset binding, preserve other commands and reject collisions atomically", (t) => {
+  const { file, open } = setup(t);
+  const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
+  assert.equal(open().describe().shortcuts.openLocalTerminal, "Ctrl+Shift+KeyT");
+  open().apply({ ...base, shortcuts: { openLocalTerminal: "", newWindow: "" } });
+  assert.equal(open().describe().shortcuts.openLocalTerminal, "");
+  open().apply({ ...base, shortcuts: { switchWindow: "Alt+KeyW" } });
+  open().apply({ ...base, backgroundColor: "#283755" });
+  const bindings = open().describe().shortcuts;
+  assert.equal(bindings.openLocalTerminal, "");
+  assert.equal(bindings.newWindow, "");
+  assert.equal(bindings.switchWindow, "Alt+KeyW");
+  assert.equal(bindings.nextTab, "Ctrl+PageDown");
+  const persisted = fs.readFileSync(file, "utf8");
+  for (const shortcuts of [null, { openLocalTerminal: "KeyT" }, { unknown: "F8" }, { newWindow: "Alt+KeyW" }]) {
+    assert.throws(() => open().apply({ ...base, shortcuts }), /快捷键/);
+    assert.equal(fs.readFileSync(file, "utf8"), persisted);
+  }
+});
 test("terminal preferences migrate, persist, validate and survive unrelated setting updates", (t) => {
   const { file, open } = setup(t);
   const initial = open().describe();

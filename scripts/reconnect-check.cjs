@@ -25,6 +25,7 @@ async function check(sourceWindow, worker) {
     const run = (source) => win.webContents.executeJavaScript(`(async () => {
       const $ = (selector) => document.querySelector(selector);
       const $$ = (selector) => [...document.querySelectorAll(selector)];
+      const disconnected = tab => ['closed', 'error'].includes(tab?.dataset.connectionState);
       const wait = async (check) => {
         for (let i = 0; i < 150; i++) {
           if (await check()) return;
@@ -57,7 +58,7 @@ async function check(sourceWindow, worker) {
       $('#file-list').textContent.includes('README.md'));`);
     const disconnect = async (id, stream) => {
       stream.end();
-      await run(`await wait(() => $('${tabSelector(id)}')?.classList.contains('disconnected') &&
+      await run(`await wait(() => disconnected($('${tabSelector(id)}')) &&
         !$('${tabSelector(id)} .tab-reconnect').hidden);`);
     };
     const reconnect = async (id, action, expectedTabs) => {
@@ -66,7 +67,8 @@ async function check(sourceWindow, worker) {
       await run(`
         const tab = $('${tabSelector(id)}');
         ${action}
-        await wait(() => !$('${tabSelector(id)}'));
+        await wait(() => tab.dataset.connection !== ${JSON.stringify(id)});
+        if (!tab.isConnected) throw new Error('Reconnect replaced the original tab');
         await wait(() => $$('.tab').length === ${expectedTabs} &&
           $$('.tab').every(tab => tab.title.includes('已连接')));
       `);
@@ -166,7 +168,7 @@ async function check(sourceWindow, worker) {
       await wait(() => $('#password-dialog').open);
       $('#connect-password').value = 'wrong-password';
       $('#password-form').requestSubmit();
-      await wait(() => $('.terminal-group.focused .tab.active')?.classList.contains('disconnected'));
+      await wait(() => disconnected($('.terminal-group.focused .tab.active')));
     `);
     id = await currentId();
     const beforeCancel = fixture.authenticated;
@@ -201,7 +203,7 @@ async function check(sourceWindow, worker) {
       worker.once("exit", () => { clearTimeout(timer); resolve(); });
       worker.kill("SIGKILL");
     });
-    await run(`await wait(() => $$('.tab').every(tab => tab.classList.contains('disconnected')));`);
+    await run(`await wait(() => $$('.tab').every(disconnected));`);
     // Use a session with a saved password so all reconnect gestures send IPC immediately.
     await run(`$('.tab .tab-select').click();`);
     const authenticated = fixture.authenticated;
@@ -223,7 +225,7 @@ async function check(sourceWindow, worker) {
         await wait(() => $('#toast').textContent.includes('请重启应用') && !retry.disabled);
         if ($('.tab.active') !== tab || tab.dataset.connection !== id || $$('.tab').length !== count)
           throw new Error('Failed reconnect replaced the original tab');
-        if (!tab.classList.contains('disconnected') || retry.hidden || !pane.isConnected ||
+        if (!disconnected(tab) || retry.hidden || !pane.isConnected ||
             !pane.textContent.includes('Welcome to JayXTerm'))
           throw new Error('Failed reconnect lost terminal contents or retry state');
       }

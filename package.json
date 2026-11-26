@@ -1,6 +1,6 @@
 {
   "name": "jayxterm",
-  "version": "0.10.5",
+  "version": "0.10.10",
   "description": "A focused SSH and SFTP desktop client",
   "private": true,
   "author": "JayXTerm contributors",
@@ -11,6 +11,7 @@
   },
   "license": "MIT",
   "scripts": {
+    "postinstall": "node scripts/prepare-local-terminal.cjs",
     "start": "electron .",
     "build": "vite build --base=./ --outDir .codex-cache/build/renderer",
     "dev": "npm run build && electron .",
@@ -26,6 +27,7 @@
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
     "iconv-lite": "^0.7.3",
+    "node-pty": "1.1.0",
     "ssh2": "^1.17.0",
     "unzipper": "0.12.5"
   },
@@ -41,9 +43,12 @@
     "directories": {
       "output": ".codex-cache/releases"
     },
+    "asarUnpack": ["**/node_modules/node-pty/**"],
     "files": [
       "src/main.cjs",
       "src/preload.cjs",
+      "src/local-shells.cjs",
+      "src/local-terminals.cjs",
       "src/ssh-worker.cjs",
       "src/remote-text.cjs",
       "src/editor-windows.cjs",
@@ -54,6 +59,7 @@
       "src/password-vault.cjs",
       "src/theme.mjs",
       "src/terminal-settings.mjs",
+      "src/shortcuts.mjs",
       "src/local-drag.cjs",
       "src/finder-drag.cjs",
       "src/transfers.cjs",
@@ -64,6 +70,7 @@
       "README.md",
       "!node_modules/cpu-features/**/*",
       "!node_modules/ssh2/lib/protocol/crypto/build/**/*",
+      "!node_modules/node-pty/prebuilds/**/*.pdb",
       "src/codec.cjs",
       "src/windows.cjs"
     ],

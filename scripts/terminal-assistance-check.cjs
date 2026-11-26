@@ -30,9 +30,11 @@ async function check(win, fixture) {
   const samples = { "sample.txt": "text", "main.cpp": "code", "deploy.sh": "shell", ".env": "config",
     "photo.png": "image", "build.tar.gz": "archive", "manual.pdf": "pdf", "data.sqlite": "database" };
   try {
-    assert.equal(original.highlightKeywords, true);
-    assert.equal(original.terminalSearchEnabled, true);
-    assert.equal(await run("return $('#terminal-search-toggle').checkVisibility();"), true);
+    const { terminalDefaults } = require("../src/terminal-settings.mjs");
+    assert.equal(original.highlightKeywords, terminalDefaults.highlightKeywords);
+    assert.equal(original.terminalSearchEnabled, terminalDefaults.terminalSearchEnabled);
+    assert.equal(await run("return $('#terminal-search-toggle').checkVisibility();"), terminalDefaults.terminalSearchEnabled);
+    await run("await setToggles(true, true);");
     console.log("Checking visible keyword colors and compact file icons");
     for (const name of Object.keys(samples)) fixture.files.set("/home/jay/" + name, Buffer.from("UI fixture only"));
     await run(`$('#remote-path').value = '/home/jay'; $('#path-form').requestSubmit();

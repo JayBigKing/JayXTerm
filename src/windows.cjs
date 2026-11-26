@@ -7,6 +7,7 @@ function createWindows({
   active,
   owners,
   states,
+  localTerminals,
   send,
   request,
   onDisconnect,
@@ -34,7 +35,7 @@ function createWindows({
         title: w.getTitle(),
         count: [...active.keys()].filter(
           (id) => owners.get(id) === w.webContents.id,
-        ).length,
+        ).length + localTerminals.count(w.webContents.id),
       }));
   }
   function broadcast(event, except) {
@@ -61,6 +62,7 @@ function createWindows({
     error ? r.reject(new Error(error)) : r.resolve(result);
   });
   function cleanup(win, id) {
+    localTerminals.closeWindow(id);
     for (const [token, r] of replies)
       if (r.owner === id) {
         clearTimeout(r.timer);
@@ -126,6 +128,7 @@ function createWindows({
     win.frontendReady.catch(() => {});
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     win.webContents.on("will-navigate", (e) => e.preventDefault());
+    win.webContents.on("did-start-loading", () => localTerminals.closeWindow(id));
     win.webContents.on("render-process-gone", () => cleanup(win, id));
     win.on("closed", () => {
       win.rejectReady?.(new Error("窗口已关闭"));
@@ -144,16 +147,19 @@ function createWindows({
         });
         return;
       }
-      if (!ids.length) return;
+      const localCount = localTerminals.count(id);
+      if (!ids.length && !localCount) return;
       e.preventDefault();
       if (win.confirming) return;
       win.confirming = true;
       dialog
         .showMessageBox(win, {
           type: "question",
-          message: `关闭窗口将断开本窗口的 ${ids.length} 个连接`,
-          detail: "其他窗口的连接不会受影响。",
-          buttons: ["取消", "关闭并断开"],
+          message: localCount
+            ? `关闭窗口将结束 ${localCount} 个本地终端${ids.length ? `，并断开 ${ids.length} 个 SSH 连接` : ""}`
+            : `关闭窗口将断开本窗口的 ${ids.length} 个连接`,
+          detail: localCount ? "本地终端中正在执行的命令可能被中断。" : "其他窗口的连接不会受影响。",
+          buttons: ["取消", localCount ? "关闭窗口" : "关闭并断开"],
           defaultId: 0,
           cancelId: 0,
         })
@@ -280,7 +286,31 @@ function createWindows({
   ipcMain.handle("windows:tab-menu", (e, id) => {
     assertOwner(e.sender, id);
     const win = get(e.sender.id);
+    const canRefresh = () => {
+      const state = states.get(id);
+      return owner(id) === win && !moves.has(id) &&
+        (["closed", "error"].includes(state) || (state === "ready" && !isBusy(id)));
+    };
     const items = [
+      {
+        label: "刷新终端",
+        enabled: canRefresh(),
+        click: async () => {
+          if (win.isDestroyed() || !canRefresh()) return;
+          if (states.get(id) === "ready") {
+            const { response } = await dialog.showMessageBox(win, {
+              type: "question",
+              buttons: ["取消", "重新连接"],
+              defaultId: 0,
+              cancelId: 0,
+              message: "重新连接此 SSH 会话？",
+              detail: "当前 Shell 会关闭，正在运行的命令可能中断。",
+            });
+            if (response !== 1) return;
+          }
+          if (canRefresh()) emit(win, { type: "refresh-tab", id });
+        },
+      },
       {
         label: "复制会话及路径",
         enabled: states.get(id) === "ready" && !moves.has(id),
