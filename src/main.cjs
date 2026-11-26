@@ -104,6 +104,10 @@ function finishTest(id, error, result) {
 function send(m) {
   if (worker?.connected) worker.send(m);
 }
+function requireWorker() {
+  if (!worker?.connected || worker.killed)
+    throw new Error("SSH 后台进程已退出，请重启应用");
+}
 function safeSessions() {
   return store
     .get()
@@ -111,6 +115,7 @@ function safeSessions() {
 }
 function request(message) {
   return new Promise((resolve, reject) => {
+    requireWorker();
     const rid = randomUUID();
     const timer = ["upload", "download", "relay", "save-text", "remove"].includes(message.action)
       ? null
@@ -465,6 +470,7 @@ ipcMain.handle("password-vault:fill", (event, { id, passwordId }) => {
   return true;
 });
 ipcMain.handle("ssh:test", (e, input) => {
+  requireWorker();
   const config = validateSession({
     ...input,
     name: String(input.name || "").trim() || "测试连接",
@@ -526,8 +532,8 @@ ipcMain.handle("sessions:delete", (e, id) => {
   workspace.broadcast({ type: "sessions-changed" }, e.sender.id);
   return safeSessions();
 });
-ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows, replacing }) => {
-  if (!worker?.connected) throw new Error("SSH 后台进程不可用，请重启应用");
+ipcMain.handle("ssh:connect", (e, { sessionId, password, encoding, cols, rows, replacing }) => {
+  requireWorker();
   if (replacing) {
     ensureOwner(e.sender, replacing);
     const state = states.get(replacing);
@@ -538,7 +544,8 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows, replacing }
   if (!s) throw new Error("会话不存在");
   const id = randomUUID();
   const secret = password || decryptSessionPassword(s.password);
-  active.set(id, s);
+  const config = { ...s, encoding: normalizeEncoding(encoding ?? s.encoding) };
+  active.set(id, config);
   owners.set(id, e.sender.id);
   states.set(id, "connecting");
   if (password && appSettings.describe().saveHistory) pendingPasswords.set(id, password);
@@ -549,7 +556,7 @@ ipcMain.handle("ssh:connect", (e, { sessionId, password, cols, rows, replacing }
       host: s.host,
       port: s.port,
       username: s.username,
-      encoding: s.encoding || "utf-8",
+      encoding: config.encoding,
     },
     password: secret,
     cols,
@@ -592,6 +599,7 @@ ipcMain.on("ssh:send", (e, m) => {
 });
 ipcMain.handle("ssh:duplicate", (event, { id: source, directory, cols, rows }) => {
   ensureOwner(event.sender, source);
+  requireWorker();
   if (!editorConnectionReady(source)) throw new Error("请先连接 SSH");
   if (typeof directory !== "string" || !directory.startsWith("/") ||
       /[\x00-\x1f\x7f]/.test(directory) || directory.length > 16384)

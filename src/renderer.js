@@ -38,6 +38,8 @@ let highlightKeywords = false;
 let quickPasswordsEnabled = false;
 let predictiveEcho = true;
 let commandShortcuts = defaultShortcuts;
+let copyOnSelect = terminalDefaults.copyOnSelect;
+let ctrlVPaste = terminalDefaults.ctrlVPaste;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -56,6 +58,13 @@ function toast(message) {
   $("#toast").style.display = "block";
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => ($("#toast").style.display = "none"), 6000);
+}
+function copiedNotice(text) {
+  const notice = $("#clipboard-notice");
+  notice.textContent = `已复制 ${Array.from(text).length} 字符`;
+  notice.hidden = false;
+  clearTimeout(copiedNotice.timer);
+  copiedNotice.timer = setTimeout(() => { notice.hidden = true; }, 1800);
 }
 function renderBackground(color) {
   theme = applyTheme(color);
@@ -128,6 +137,8 @@ function updateSettings(settings) {
     if (quickPasswordsEnabled) quickPasswords.activate();
   }
   predictiveEcho = settings.predictiveEcho;
+  copyOnSelect = settings.copyOnSelect;
+  ctrlVPaste = settings.ctrlVPaste;
   for (const tab of tabs.values()) tab.echo?.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
@@ -503,6 +514,9 @@ function resetRemoteView(tab, message = "") {
   tab.fileError = message;
   tab.transferStatus = "";
 }
+function isDisconnected(tab) {
+  return !tab.local && (tab.state === "已断开" || tab.state === "连接出错");
+}
 async function refreshTerminal(tab) {
   if (!tab || tab.local || tab.moving || tab.reconnecting ||
       !["已连接", "已断开", "连接出错"].includes(tab.state)) return;
@@ -517,12 +531,14 @@ async function refreshTerminal(tab) {
   }
   const previousId = tab.id;
   tab.reconnecting = true;
+  renderTabIndicator(tab);
   try {
     const password = await connectionPassword(session);
     if (password === null || tabs.get(previousId) !== tab || tab.moving) return;
     const id = await api.connect({
       sessionId: session.id,
       password,
+      encoding: tab.encoding,
       cols: tab.term.cols,
       rows: tab.term.rows,
       replacing: previousId,
@@ -541,7 +557,6 @@ async function refreshTerminal(tab) {
     for (const entry of ordered) tabs.set(entry.id, entry);
     if (tab.group.shown === previousId) tab.group.shown = id;
     tab.session = session;
-    tab.encoding = session.encoding || "utf-8";
     tab.state = "连接中";
     tab.transferring = tab.removing = tab.localDragging = false;
     resetRemoteView(tab, "正在重新连接 SSH…");
@@ -559,6 +574,7 @@ async function refreshTerminal(tab) {
     toast(error.message);
   } finally {
     tab.reconnecting = false;
+    renderTabIndicator(tab);
   }
 }
 async function openLocalTerminal(profile) {
@@ -710,24 +726,28 @@ async function duplicateTab(tab) {
     tab.duplicating = false;
   }
 }
-async function terminalClipboard(t, action) {
-  if (!t || !tabs.has(t.id) || t.moving) return;
+async function terminalClipboard(t, action, automatic = false) {
+  if (!t || tabs.get(t.id) !== t || t.moving) return;
+  const id = t.id;
   try {
     if (action === "copy") {
       const text = t.term.getSelection();
-      if (text) await api.writeClipboard(text);
+      if (text) {
+        await api.writeClipboard(text);
+        if (automatic) copiedNotice(text);
+      }
     } else if (action === "paste") {
-      if (t.state !== "已连接") return;
+      if (t.state !== "已连接" || t.term.options.disableStdin) return;
       const text = await api.readClipboard();
-      if (!tabs.has(t.id) || t.moving || t.term.options.disableStdin) return;
+      if (tabs.get(id) !== t || t.moving || t.state !== "已连接" || t.term.options.disableStdin) return;
       // xterm's paste API honors bracketed-paste mode and normalizes line breaks.
       // It uses the same onData path as typing, including GBK input conversion.
-      if (text) {
+      if (typeof text === "string" && text) {
         t.term.clearSelection();
         t.term.paste(text);
       }
     } else if (action === "select-all") t.term.selectAll();
-    t.term.focus();
+    if (!automatic && tabs.get(id) === t) t.term.focus();
   } catch (error) {
     toast(error.message);
   }
@@ -795,14 +815,39 @@ function createTerminal(session, id, { moving = false, local = false } = {}) {
     if (current !== tab.id && !fileWorkspaceOpen && tab.group.shown === tab.id)
       activate(tab.id, false);
   });
-  // Clipboard operations are available only through the terminal context menu.
-  // Keep ordinary terminal keys (Ctrl+C, Vim Ctrl+V, etc.) untouched.
+  pane.addEventListener("dblclick", (event) => {
+    if (event.button === 0 && isDisconnected(tab)) void refreshTerminal(tab);
+  });
+  // Handle clipboard access explicitly to avoid a second browser paste and
+  // preserve Ctrl+C and, when its paste setting is off, terminal Ctrl+V.
   const blockBrowserClipboard = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   pane.addEventListener("copy", blockBrowserClipboard, true);
   pane.addEventListener("paste", blockBrowserClipboard, true);
+  term.attachCustomKeyEventHandler((event) => {
+    if (!ctrlVPaste || !event.ctrlKey || event.shiftKey || event.altKey || event.metaKey ||
+        event.isComposing || event.key.toLowerCase() !== "v") return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "keydown" && !event.repeat) void terminalClipboard(tab, "paste");
+    return false;
+  });
+  // Copy only a mouse selection, after xterm has handled mouseup on document.
+  // Programmatic selections (search, restored tabs, output) must not copy.
+  tab.clipboardEvents = new AbortController();
+  const { signal } = tab.clipboardEvents;
+  let selecting = false;
+  pane.addEventListener("mousedown", (event) => {
+    if (event.button === 0 && event.target.closest(".xterm-screen")) selecting = true;
+  }, { capture: true, signal });
+  window.addEventListener("mouseup", (event) => {
+    if (event.button !== 0 || !selecting) return;
+    selecting = false;
+    if (copyOnSelect) void terminalClipboard(tab, "copy", true);
+  }, { signal });
+  window.addEventListener("blur", () => { selecting = false; }, { signal });
   pane.oncontextmenu = (event) => {
     event.preventDefault();
     api
@@ -960,18 +1005,28 @@ function createTabElement(tab) {
   const select = el("button", "tab-select");
   const dot = el("span", "dot");
   const label = el("span", "tab-name", tab.session.name);
+  const reconnect = el("button", "tab-reconnect", "↻");
   const close = el("button", "close", "×");
-  select.type = close.type = "button";
+  select.type = reconnect.type = close.type = "button";
   dot.setAttribute("aria-hidden", "true");
   select.append(dot, label);
+  reconnect.title = "重新连接";
+  reconnect.onclick = (event) => {
+    event.stopPropagation();
+    if (isDisconnected(tab)) void refreshTerminal(tab);
+  };
   close.title = tab.local ? "关闭本地终端" : "关闭连接";
   close.setAttribute("aria-label", "关闭 " + tab.session.name);
   close.onclick = (event) => {
     event.stopPropagation();
     closeTab(tab.id);
   };
-  element.append(select, close);
+  element.append(select, reconnect, close);
   element.onclick = () => activate(tab.id);
+  element.ondblclick = (event) => {
+    if (event.button === 0 && isDisconnected(tab) && !event.target.closest(".close, .tab-reconnect"))
+      void refreshTerminal(tab);
+  };
   element.oncontextmenu = (event) => {
     event.preventDefault();
     if (tab.local) return;
@@ -987,18 +1042,18 @@ function createTabElement(tab) {
     }
   };
   element.ondragstart = (event) => {
-    if (tab.moving || event.target.closest(".close")) {
+    if (tab.moving || tab.reconnecting || event.target.closest(".close, .tab-reconnect")) {
       event.preventDefault();
       return;
     }
     event.dataTransfer.setData(terminalDragType, tab.id);
     event.dataTransfer.effectAllowed = "move";
   };
-  return { element, select, label, close };
+  return { element, select, label, reconnect, close };
 }
 function renderTabIndicator(tab) {
   if (!tab.header) return;
-  const { element, select, label, close } = tab.header;
+  const { element, select, label, reconnect, close } = tab.header;
   const state = tab.state === "已连接" ? "ready" : tab.state === "连接出错" ? "error"
     : tab.state === "已断开" ? "closed" : tab.state === "已退出" ? "exited" : "connecting";
   const status = tab.local && state === "ready" ? "运行中" : tab.state;
@@ -1007,7 +1062,11 @@ function renderTabIndicator(tab) {
   element.title = `${tab.session.name} · ${status}`;
   select.setAttribute("aria-label", element.title);
   label.textContent = tab.session.name;
+  reconnect.hidden = !isDisconnected(tab);
+  reconnect.disabled = tab.moving || !!tab.reconnecting;
+  reconnect.setAttribute("aria-label", "重新连接 " + tab.session.name);
   close.setAttribute("aria-label", "关闭 " + tab.session.name);
+  element.draggable = !tab.moving && !tab.reconnecting;
 }
 function renderTabs() {
   for (const tab of tabs.values()) {
@@ -1018,7 +1077,6 @@ function renderTabs() {
     const visible = tab.group.shown === tab.id;
     element.classList.toggle("active", visible);
     select.setAttribute("aria-pressed", String(visible));
-    element.draggable = !tab.moving;
   }
 }
 function fitTerminal(t) {
@@ -1101,6 +1159,7 @@ function closeTab(id, disconnect = true) {
   t.highlights?.dispose();
   t.passwordPrompt?.dispose();
   t.echo?.dispose();
+  t.clipboardEvents.abort();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();

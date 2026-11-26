@@ -304,6 +304,14 @@ main {
   flex-shrink: 0;
   color: var(--muted);
 }
+.tab .tab-reconnect {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  font-size: 16px;
+}
+.tab-reconnect[hidden] {
+  display: none;
+}
 .tab button:hover {
   background: var(--hover);
 }
@@ -633,6 +641,19 @@ label > input {
   display: none;
   z-index: 20;
   font-size: 12px;
+}
+#clipboard-notice {
+  position: fixed;
+  right: 12px;
+  bottom: 42px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 20;
 }
 .side-modes {
   display: flex;
