@@ -44,6 +44,8 @@ async function check(win, fixture) {
   };
   const seeLine = line => run(`await wait(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')]
     .some(row => row.textContent.trim() === ${JSON.stringify(line)}));`);
+  const seeLastLine = line => run(`await wait(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')]
+    .map(row => row.textContent.trim()).filter(Boolean).at(-1) === ${JSON.stringify(line)});`);
   const zoom = win.webContents.getZoomFactor();
   const localShortcut = '[data-shortcut="openLocalTerminal"]';
   const openShortcuts = async () => run(`$('#settings-open').click();
@@ -78,10 +80,21 @@ async function check(win, fixture) {
       "process.once('SIGINT', () => { clearTimeout(timer); process.stdout.write('\\nJAYXTERM_' + 'INTERRUPTED\\n'); }); " +
       "console.log('JAYXTERM_' + 'INTERRUPT_READY');";
     const resumed = cmd ? "echo JAYXTERM_%OS%_RESUMED" : "printf '%s%s\\n' JAYXTERM_ RESUMED";
-    await enter(`node -e "${interruptProbe}" && ${resumed}`);
+    const windows = process.platform === "win32";
+    const prompt = "JAYXTERM_QA_PROMPT";
+    if (windows) {
+      await enter(cmd ? `prompt ${prompt}$G` : `unset PROMPT_COMMAND; PS1='${prompt}> '`);
+      await seeLastLine(`${prompt}>`);
+    }
+    await enter(`node -e "${interruptProbe}"${windows ? "" : ` && ${resumed}`}`);
     await seeLine("JAYXTERM_INTERRUPT_READY");
     keystroke("C", ["control"]);
     await seeLine("JAYXTERM_INTERRUPTED");
+    if (windows) {
+      // Git Bash cancels the remaining command list after Ctrl+C.
+      await seeLastLine(`${prompt}>`);
+      await enter(resumed);
+    }
     await seeLine(cmd ? "JAYXTERM_Windows_NT_RESUMED" : "JAYXTERM_RESUMED");
     assert.equal(fixture.inputs.length, remoteInputCount, "Local input must stay out of SSH");
     await enter("exit");
