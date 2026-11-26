@@ -11,8 +11,18 @@ app.on("browser-window-created", (_event, win) => {
 });
 for (const name of ["sessions.json", "settings.json", "quick-passwords.json"])
   fs.rmSync(path.resolve(".codex-cache/qa/profile", name), { force: true });
+// Capture only this test application's worker for the final crash regression.
+const childProcess = require("node:child_process");
+const originalFork = childProcess.fork;
+let sshWorker;
+childProcess.fork = function (file, ...args) {
+  const child = originalFork.call(this, file, ...args);
+  if (file === path.resolve("src/ssh-worker.cjs")) sshWorker = child;
+  return child;
+};
 require("../src/main.cjs");
 app.whenReady().then(async () => {
+  childProcess.fork = originalFork;
   const started = Date.now();
   let stage;
   const markStage = (name) => {
@@ -357,7 +367,7 @@ app.whenReady().then(async () => {
         w,
         fixture,
       );
-    await runCheck("terminal reconnect", "./reconnect-check.cjs", w);
+    await runCheck("terminal reconnect and worker exit", "./reconnect-check.cjs", w, sshWorker);
     markStage("cleanup");
     await w.webContents.executeJavaScript(
       `(()=>{for(const button of document.querySelectorAll('.tab .close'))button.click();})()`,

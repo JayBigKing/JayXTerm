@@ -1,5 +1,11 @@
 # 初版验证记录
 
+## 2026-11-26：SSH 后台退出后的重连
+
+- 新回归在真实 Electron 中终止测试实例的 SSH 后台，先确认旧代码会替换原标签并一直连接；修复后点击刷新、双击标签、双击终端均立即提示重启应用，保留原连接 ID、标签、输出和重试按钮。
+- 新建连接、连接测试和 SFTP 请求在后台退出后立即拒绝，不创建等待中的连接或超时任务；后台退出时同步更新主进程的连接状态。
+- `npm test` 的 41 项测试、`npm run build` 及扩展 Electron smoke 通过。smoke 启用 `JAYXTERM_WORKSPACE_QA=1 JAYXTERM_MULTIWINDOW_QA=1 JAYXTERM_CLIPBOARD_QA=1 JAYXTERM_FEATURES_QA=1`，覆盖分屏、多窗口、剪贴板、复制会话和常规重连；后台退出检查已纳入常规 smoke 的最后阶段。Windows 实机未在本次本地验证中运行。
+
 ## 2026-11-26：TUN 重启后保留屏蔽
 
 - 先用新回归复现清单缺失、空文件、全无效三种情况下，TUN 开启时重启守护会清空已有 hosts 屏蔽。

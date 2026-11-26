@@ -14,7 +14,7 @@ async function waitFor(check, message) {
   throw new Error(message);
 }
 
-async function check(sourceWindow) {
+async function check(sourceWindow, worker) {
   const fixture = createFixture();
   await new Promise((resolve) => fixture.server.listen(0, "127.0.0.1", resolve));
   let win;
@@ -192,6 +192,62 @@ async function check(sourceWindow) {
     assert.equal(await run("return $$('.tab').length;"), 4);
     assert.ok(await run("return $('.terminal-group.focused .tab.active .tab-reconnect').hidden;"));
     console.log("PASS: failed authentication retry, password cancellation/re-entry and closing during reconnect without leaked tabs or connections");
+
+    // Worker death is different from an individual SSH connection closing.
+    // Keep it last: every terminal in this test application loses its backend.
+    assert.ok(worker?.connected, "Crash regression requires the application's SSH worker");
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("SSH worker did not exit")), 5000);
+      worker.once("exit", () => { clearTimeout(timer); resolve(); });
+      worker.kill("SIGKILL");
+    });
+    await run(`await wait(() => $$('.tab').every(tab => tab.classList.contains('disconnected')));`);
+    // Use a session with a saved password so all reconnect gestures send IPC immediately.
+    await run(`$('.tab .tab-select').click();`);
+    const authenticated = fixture.authenticated;
+    await run(`
+      const tab = $('.tab.active');
+      const id = tab.dataset.connection;
+      const pane = $('.terminal-group.focused .terminal-pane.active');
+      // xterm renders queued output asynchronously after the disconnect event.
+      await wait(() => pane.textContent.includes('SSH 后台进程已退出'));
+      const count = $$('.tab').length;
+      const retry = tab.querySelector('.tab-reconnect');
+      for (const gesture of [
+        () => retry.click(),
+        () => tab.querySelector('.tab-select').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })),
+        () => pane.querySelector('.xterm-screen').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })),
+      ]) {
+        $('#toast').textContent = '';
+        gesture();
+        await wait(() => $('#toast').textContent.includes('请重启应用') && !retry.disabled);
+        if ($('.tab.active') !== tab || tab.dataset.connection !== id || $$('.tab').length !== count)
+          throw new Error('Failed reconnect replaced the original tab');
+        if (!tab.classList.contains('disconnected') || retry.hidden || !pane.isConnected ||
+            !pane.textContent.includes('Welcome to JayXTerm'))
+          throw new Error('Failed reconnect lost terminal contents or retry state');
+      }
+
+      const expectUnavailable = async (request) => {
+        let timer;
+        try {
+          const result = await Promise.race([
+            request().then(() => 'unexpected success', error => error.message),
+            new Promise(resolve => { timer = setTimeout(() => resolve('request timed out'), 1500); }),
+          ]);
+          if (!result.includes('请重启应用')) throw new Error(result);
+        } finally { clearTimeout(timer); }
+      };
+      const session = (await api.sessions()).find(item => item.name === '断线重连验收');
+      await expectUnavailable(() => api.connect({ sessionId: session.id, cols: 100, rows: 30 }));
+      await expectUnavailable(() => api.test({ ...session, password: 'qa-password' }));
+      await expectUnavailable(() => api.list({ id, path: '.' }));
+      if ($$('.tab').length !== count) throw new Error('Unavailable worker created an extra tab');
+    `);
+    assert.equal(fixture.authenticated, authenticated, "Dead-worker requests must not start SSH connections");
+    fs.writeFileSync(path.resolve(".codex-cache/qa/reconnect-worker-exit.png"),
+      (await win.webContents.capturePage()).toPNG());
+    console.log("PASS: worker exit rejects reconnect/new connections, connection tests and SFTP immediately while preserving tabs and terminal contents");
   } finally {
     win?.destroy();
     fixture.close();
