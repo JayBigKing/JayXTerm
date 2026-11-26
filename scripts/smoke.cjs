@@ -72,6 +72,7 @@ app.whenReady().then(async () => {
       document.querySelector('#toggle-password').click();if(field.type!=='password')throw new Error('Password hide failed');
       document.querySelector('#editor-cancel').click();await new Promise(r=>setTimeout(r,50));if(field.value)throw new Error('Password was not cleared on dialog close');
     })()`);
+    await runCheck("session group picker themes", "./session-group-check.cjs", w);
     const file = path.resolve(".codex-cache/qa/profile/sessions.json");
     if (fs.readFileSync(file, "utf8").includes("qa-password"))
       throw new Error("Plaintext password persisted");
@@ -136,6 +137,8 @@ app.whenReady().then(async () => {
       path.resolve(".codex-cache/qa/connected.png"),
       (await w.webContents.capturePage()).toPNG(),
     );
+    if (process.env.JAYXTERM_RECONNECT_QA === "1")
+      await runCheck("SSH disconnection and reconnect", "./terminal-reconnect-check.cjs", w, fixture);
     if (process.env.JAYXTERM_CLIPBOARD_QA === "1")
       await runCheck("clipboard", "./clipboard-check.cjs", w, fixture);
     if (process.env.JAYXTERM_EDITOR_QA === "1")
@@ -357,6 +360,8 @@ app.whenReady().then(async () => {
         w,
         fixture,
       );
+    if (process.env.JAYXTERM_LOCAL_TERMINAL_QA === "1")
+      await runCheck("local terminal profiles and interactive PTY", "./local-terminal-check.cjs", w, fixture);
     markStage("cleanup");
     await w.webContents.executeJavaScript(
       `(()=>{for(const button of document.querySelectorAll('.tab .close'))button.click();})()`,

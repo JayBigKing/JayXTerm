@@ -1,5 +1,6 @@
 import { terminalDefaults, terminalFont } from "./terminal-settings.mjs";
 import { installFontPicker } from "./font-picker.js";
+import { installShortcutSettings } from "./shortcut-settings.js";
 
 // Add sections in the markup and fields here; loading/saving and navigation stay shared.
 const fields = ["backgroundColor", "fontFamily", "cjkFontFamily", "fontSize", "defaultEncoding", "highlightKeywords", "terminalSearchEnabled", "quickPasswordsEnabled", "predictiveEcho", "fileOpen", "saveHistory"];
@@ -7,6 +8,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, previewKe
   const $ = (selector) => document.querySelector(selector);
   const dialog = $("#settings-dialog"), form = $("#settings-form");
   const fontPicker = installFontPicker(dialog, form);
+  const shortcuts = installShortcutSettings($("#settings-shortcuts"));
   let saved, displayed, cacheChoice = "";
   const buttons = [...dialog.querySelectorAll("[data-settings-section]")];
   function selectSection(button) {
@@ -63,6 +65,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, previewKe
     try {
       displayed = saved = await api.settings();
       cacheChoice = displayed.pendingCache ?? displayed.cachePath;
+      shortcuts.load(displayed.shortcuts);
       for (const name of fields) {
         const field = form.elements[name];
         if (field.type === "checkbox") field.checked = displayed[name];
@@ -107,7 +110,7 @@ export function installSettingsPanel({ api, previewColor, previewFont, previewKe
     button.disabled = true;
     $("#settings-error").textContent = "";
     try {
-      const result = await api.applySettings({ ...readFields(), cachePath: cacheChoice });
+      const result = await api.applySettings({ ...readFields(), cachePath: cacheChoice, shortcuts: shortcuts.changes() });
       if (!result) return;
       saved = result;
       onSave(result);

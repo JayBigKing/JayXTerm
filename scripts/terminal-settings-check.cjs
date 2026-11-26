@@ -37,7 +37,8 @@ async function check(win, fixture) {
       window.__initialColumns = columns();
       const otherFont = getComputedStyle($('.sidebar')).fontSize;
       await open();
-      if (document.querySelectorAll('.settings-nav [role=tab]').length !== 4) throw new Error('Missing settings categories');
+      const categories = [...document.querySelectorAll('.settings-nav [role=tab]')].map(tab => tab.dataset.settingsSection);
+      if (categories.join(',') !== 'appearance,terminal,shortcuts,files,passwords') throw new Error('Missing settings categories');
       $('#settings-tab-appearance').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
       if ($('#settings-terminal').hidden || document.activeElement.id !== 'settings-tab-terminal') throw new Error('Keyboard category navigation failed');
       $('#settings-font-family').value = 'Consolas';

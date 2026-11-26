@@ -213,10 +213,13 @@ button.primary:hover {
   display: inline-block;
   width: 5px;
   height: 5px;
-  background: var(--success);
+  background: var(--muted);
   border-radius: 50%;
   margin-right: 7px;
 }
+.tab[data-connection-state="ready"] .dot { background: var(--success); }
+.tab[data-connection-state="connecting"] .dot { background: var(--warning); }
+.tab[data-connection-state="error"] .dot { background: var(--danger); }
 main {
   flex: 1;
   min-width: 0;
@@ -539,6 +542,54 @@ label > input {
 .form-row .port {
   flex: 0 0 90px;
 }
+.session-group-field { flex: 1; min-width: 0; font-size: 11px; }
+.session-group-control {
+  --group-chevron-width: 34px;
+  position: relative;
+  display: flex;
+  margin-top: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding-right: var(--group-chevron-width);
+  background: var(--surface);
+}
+.session-group-control:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-group-control input { position: relative; z-index: 1; border: 0; background: transparent; outline: none; }
+/* Give the native menu the field's full width while the input covers its left side. */
+.session-group-control select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  outline: none;
+}
+.session-group-control select:not(:disabled):hover + .session-group-chevron { background: var(--hover); }
+.session-group-control select:disabled { cursor: default; }
+.session-group-chevron {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: var(--group-chevron-width);
+  border-left: 1px solid var(--line);
+  border-radius: 0 5px 5px 0;
+  pointer-events: none;
+}
+.session-group-chevron svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.session-group-control select:disabled + .session-group-chevron svg { opacity: 0.5; }
 .check {
   display: flex;
   align-items: center;
@@ -664,6 +715,10 @@ select {
   width: 100%;
   margin-top: 7px;
 }
+dialog select option {
+  color: var(--ink);
+  background: var(--surface);
+}
 .password-field {
   display: flex;
   position: relative;
@@ -765,8 +820,33 @@ dialog pre {
 }
 .window-tools svg circle { fill: var(--surface); }
 .window-menu-label { padding: 5px 8px; color: var(--muted); font-size: 11px; }
-.workbench-menu { min-width: 208px; }
+.workbench-menu {
+  --workbench-menu-width: 208px;
+  width: var(--workbench-menu-width);
+  max-width: calc(100vw - 16px);
+  max-height: 65vh;
+  overflow: auto;
+}
+.workbench-page:not([hidden]), .workbench-shell-list { display: grid; gap: 2px; }
+.workbench-local { display: grid; grid-template-columns: minmax(0, 1fr) 30px; }
+.workbench-menu #local-terminal-open, .workbench-menu .workbench-back, .workbench-menu .workbench-defaults {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.workbench-menu #local-terminal-menu { display: grid; place-items: center; padding: 0; color: var(--muted); }
+.workbench-menu .workbench-back { color: var(--accent); }
+.workbench-menu svg { width: 14px; height: 14px; flex: none; }
+.workbench-defaults { width: 100%; }
+.workbench-defaults span {
+  min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted);
+  font-size: 11px; text-overflow: ellipsis; white-space: nowrap;
+}
+.workbench-shell-list button { min-width: 0; overflow-wrap: anywhere; }
+.workbench-shell-list button[aria-pressed] { display: flex; justify-content: space-between; gap: 6px; }
+.workbench-shell-list button[aria-pressed="true"] { color: var(--accent); }
 .workbench-menu-divider { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 9px; }
+.workbench-page div.workbench-menu-divider { padding-top: 3px; }
 #session-import-dialog {
   width: min(640px, calc(100% - 32px));
   max-height: calc(100% - 32px);
@@ -1028,6 +1108,17 @@ dialog pre {
 .settings-content [hidden] { display: none; }
 .settings-content .form-note { font-size: 12px !important; line-height: 1.6; }
 .settings-content label { font-size: 13px; }
+.settings-shortcut-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.settings-content .settings-shortcut-heading h3 { margin: 0; }
+.settings-shortcut-list { display: grid; }
+.settings-shortcut-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 152px) auto;
+  align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line);
+}
+.settings-shortcut-row span, .settings-shortcut-record { overflow-wrap: anywhere; }
+.settings-shortcut-record[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.settings-shortcut-clear { white-space: nowrap; }
+#settings-shortcut-status { min-height: 1.6em; }
 .settings-font-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .font-choice { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; text-align: left; padding: 10px 12px; background: var(--surface); }
 .font-choice span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

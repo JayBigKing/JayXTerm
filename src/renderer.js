@@ -9,6 +9,7 @@ import { installTerminalSearch } from "./terminal-search.js";
 import { fileIcon, trashIcon } from "./file-icons.js";
 import { installQuickPasswords } from "./quick-passwords.js";
 import { installTerminalEcho } from "./terminal-echo.mjs";
+import { defaultShortcuts, formatShortcut, shortcutFromEvent } from "./shortcuts.mjs";
 import "./style.css";
 const $ = (s) => document.querySelector(s);
 const api = window.api;
@@ -23,6 +24,7 @@ let groupMenuId = 0;
 const terminalDragType = "application/x-jayxterm-terminal";
 const remoteDragType = "application/x-jayxterm-sftp";
 let focusedGroup;
+let sidebarMode = "sessions";
 let fileWorkspaceOpen = false;
 let fileWorkspaceVersion = 0;
 let fileOpen = "double";
@@ -35,11 +37,19 @@ let defaultEncoding = terminalDefaults.defaultEncoding;
 let highlightKeywords = false;
 let quickPasswordsEnabled = false;
 let predictiveEcho = true;
+let commandShortcuts = defaultShortcuts;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
   if (text !== undefined) n.textContent = text;
   return n;
+};
+const sshTab = (tab) => tab?.local ? undefined : tab;
+const activeSshTab = () => sshTab(tabs.get(current));
+const sendTerminal = (tab, message) => {
+  const payload = { ...message, id: tab.id };
+  if (tab.local) api.localTerminal.send(payload);
+  else api.send(payload);
 };
 function toast(message) {
   $("#toast").textContent = message;
@@ -89,9 +99,21 @@ function showTerminal() {
   if (fileWorkspaceOpen) toggleFileWorkspace(false);
 }
 const terminalSearch = installTerminalSearch({ getActiveTab: () => tabs.get(current), showTerminal, getTheme: () => theme });
-const quickPasswords = installQuickPasswords({ api, getActiveTab: () => tabs.get(current), showTerminal, toast });
+const quickPasswords = installQuickPasswords({ api, getActiveTab: activeSshTab, showTerminal, toast });
 function updateSettings(settings) {
   settingsPanel.setSaved(settings);
+  commandShortcuts = settings.shortcuts;
+  for (const [id, selector, label] of [
+    ["openLocalTerminal", "#local-terminal-open", "打开默认本地 Shell"],
+    ["newWindow", "#new-window", "新窗口"],
+    ["switchWindow", "#window-picker", "切换窗口"],
+  ]) {
+    const control = $(selector);
+    const binding = commandShortcuts[id];
+    control.title = binding ? `${label}（${formatShortcut(binding)}）` : label;
+    if (binding) control.setAttribute("aria-keyshortcuts", formatShortcut(binding, true));
+    else control.removeAttribute("aria-keyshortcuts");
+  }
   renderBackground(settings.backgroundColor);
   renderTerminalFont(settings);
   renderKeywordHighlights(settings.highlightKeywords);
@@ -101,16 +123,16 @@ function updateSettings(settings) {
     quickPasswords.setEnabled(quickPasswordsEnabled);
     for (const tab of tabs.values()) {
       tab.passwordPrompt?.dispose();
-      tab.passwordPrompt = quickPasswordsEnabled ? quickPasswords.watch(tab) : null;
+      tab.passwordPrompt = quickPasswordsEnabled && !tab.local ? quickPasswords.watch(tab) : null;
     }
     if (quickPasswordsEnabled) quickPasswords.activate();
   }
   predictiveEcho = settings.predictiveEcho;
-  for (const tab of tabs.values()) tab.echo.setEnabled(predictiveEcho);
+  for (const tab of tabs.values()) tab.echo?.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
   fileOpen = settings.fileOpen;
-  const tab = tabs.get(current);
+  const tab = activeSshTab();
   if (tab) renderSidebarFiles(tab);
   for (const group of groups) {
     if (!group.filePanel) continue;
@@ -182,12 +204,13 @@ async function openRemoteEditor(t, file) {
   }
 }
 function setMode(mode) {
-  const files = mode === "files";
+  sidebarMode = mode;
+  const files = mode === "files" && !tabs.get(current)?.local;
   $("#session-panel").classList.toggle("hidden", files);
   $("#files-panel").classList.toggle("hidden", !files);
   $("#mode-sessions").classList.toggle("active", !files);
   $("#mode-files").classList.toggle("active", files);
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (files && !t)
     $("#file-list").replaceChildren(
       el("div", "empty", "请先在会话中连接一台服务器。"),
@@ -195,7 +218,23 @@ function setMode(mode) {
 }
 $("#mode-sessions").onclick = () => setMode("sessions");
 $("#mode-files").onclick = () => setMode("files");
+const groupInput = $("#session-group");
+const groupPicker = $("#session-group-picker");
+function updateGroupPicker() {
+  const groups = [...new Set(sessions.map(session => session.group).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const placeholder = new Option("", "", true, true);
+  placeholder.disabled = placeholder.hidden = true;
+  groupPicker.replaceChildren(placeholder, ...groups.map(group => new Option(group, group)));
+  groupPicker.disabled = !groups.length;
+}
+groupPicker.onchange = () => {
+  if (!groupPicker.value) return;
+  groupInput.value = groupPicker.value;
+  groupPicker.selectedIndex = 0;
+  groupInput.focus();
+};
 function renderSessions() {
+  if ($("#editor").open) updateGroupPicker();
   $("#welcome-new").textContent = sessions.length
     ? "＋ 新建会话"
     : "＋ 添加第一台服务器";
@@ -270,6 +309,7 @@ function edit(s = {}) {
   for (const field of ["id", "name", "host", "port", "username", "group"])
     form.elements[field].value =
       s[field] ?? (field === "port" ? 22 : field === "username" ? "root" : "");
+  updateGroupPicker();
   form.elements.remember.checked = s.id ? s.hasPassword : true;
   form.elements.password.placeholder = s.hasPassword
     ? "已保存 · 留空保留密码"
@@ -332,7 +372,7 @@ $("#encoding-help").onclick = () => {
 };
 $("#cwd-help").onclick = () => {
   $("#help-options").hidePopover();
-  showCwdDialog(tabs.get(current));
+  showCwdDialog(activeSshTab());
 };
 for (const [menuId, buttonId, opensUp] of [
   ["#upload-options", "#upload", false],
@@ -348,15 +388,9 @@ for (const [menuId, buttonId, opensUp] of [
     menu.style.bottom = opensUp ? `${innerHeight - bounds.top + 5}px` : "auto";
   });
 }
-$("#window-tools-options").addEventListener("beforetoggle", (event) => {
-  if (event.newState !== "open") return;
-  const bounds = $("#window-tools-menu").getBoundingClientRect();
-  event.currentTarget.style.left = bounds.left + "px";
-  event.currentTarget.style.top = bounds.bottom + 6 + "px";
-});
 $("#encoding-close").onclick = () => $("#encoding-dialog").close();
 $("#terminal-encoding").onchange = async () => {
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (!t) return;
   const selector = $("#terminal-encoding");
   const encoding = selector.value;
@@ -374,9 +408,9 @@ $("#terminal-encoding").onchange = async () => {
   } catch (e) {
     toast(e.message);
   } finally {
-    const active = tabs.get(current);
+    const active = activeSshTab();
     selector.value = active?.encoding || "utf-8";
-    selector.disabled = !active;
+    selector.disabled = active?.state !== "已连接";
   }
 };
 $("#new").onclick = $("#welcome-new").onclick = () => edit();
@@ -431,17 +465,20 @@ $("#password-cancel").onclick = () => {
   passwordResolve?.(null);
   passwordResolve = null;
 };
+function connectionPassword(session) {
+  if (session.hasPassword) return undefined;
+  const dialog = $("#password-dialog");
+  if (dialog.open) return null;
+  $("#password-host").textContent = `${session.username}@${session.host}`;
+  $("#connect-password").value = "";
+  dialog.showModal();
+  loadConnectHistory();
+  return new Promise(resolve => { passwordResolve = resolve; });
+}
 async function connect(session) {
-  let password;
-  if (!session.hasPassword) {
-    $("#password-host").textContent = `${session.username}@${session.host}`;
-    $("#connect-password").value = "";
-    $("#password-dialog").showModal();
-    loadConnectHistory();
-    password = await new Promise((r) => (passwordResolve = r));
-    if (password === null) return;
-  }
   try {
+    const password = await connectionPassword(session);
+    if (password === null) return;
     const id = await api.connect({
       sessionId: session.id,
       password,
@@ -453,8 +490,208 @@ async function connect(session) {
     toast(e.message);
   }
 }
+function resetRemoteView(tab, message = "") {
+  clearCwdQuery(tab);
+  tab.loadVersion++;
+  tab.loading = false;
+  tab.shellDirectory = null;
+  tab.workspaceSyncVersion = undefined;
+  tab.workspaceDirectoryNote = "";
+  tab.path = ".";
+  tab.files = [];
+  tab.selected = null;
+  tab.fileError = message;
+  tab.transferStatus = "";
+}
+async function refreshTerminal(tab) {
+  if (!tab || tab.local || tab.moving || tab.reconnecting ||
+      !["已连接", "已断开", "连接出错"].includes(tab.state)) return;
+  if (tab.state === "已连接" && (tab.transferring || tab.removing || tab.localDragging)) {
+    toast("请等待当前文件操作结束后重连");
+    return;
+  }
+  const session = sessions.find(({ id }) => id === tab.session.id);
+  if (!session) {
+    toast("原会话已删除，请新建会话后连接");
+    return;
+  }
+  const previousId = tab.id;
+  tab.reconnecting = true;
+  try {
+    const password = await connectionPassword(session);
+    if (password === null || tabs.get(previousId) !== tab || tab.moving) return;
+    const id = await api.connect({
+      sessionId: session.id,
+      password,
+      cols: tab.term.cols,
+      rows: tab.term.rows,
+      replacing: previousId,
+    });
+    if (tabs.get(previousId) !== tab || tab.moving) {
+      api.send({ type: "disconnect", id });
+      return;
+    }
+    // Use a new connection ID so a delayed event from the old SSH channel
+    // cannot change the new connection, even though the tab stays in place.
+    sendTerminal(tab, { type: "disconnect" });
+    tab.passwordPrompt?.dispose();
+    const ordered = [...tabs.values()];
+    tabs.clear();
+    tab.id = id;
+    for (const entry of ordered) tabs.set(entry.id, entry);
+    if (tab.group.shown === previousId) tab.group.shown = id;
+    tab.session = session;
+    tab.encoding = session.encoding || "utf-8";
+    tab.state = "连接中";
+    tab.transferring = tab.removing = tab.localDragging = false;
+    resetRemoteView(tab, "正在重新连接 SSH…");
+    tab.passwordPrompt = quickPasswordsEnabled ? quickPasswords.watch(tab) : null;
+    tab.echo.reset();
+    tab.term.options.disableStdin = true;
+    // Cancel any incomplete escape sequence, then reset both terminal buffers
+    // in the write queue between the old output and the new connection.
+    tab.term.writeln(`\x18\x1bc\x1b[32m正在重新连接 ${session.host}…\x1b[0m`);
+    sendTerminal(tab, { type: "start" });
+    renderTabIndicator(tab);
+    if (current === previousId) activate(id, false);
+    else if (fileWorkspaceOpen) renderWorkspaceFiles(tab.group);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    tab.reconnecting = false;
+  }
+}
+async function openLocalTerminal(profile) {
+  showTerminal();
+  const id = crypto.randomUUID();
+  const tab = createTerminal({ name: `本地 · ${profile.name}` }, id, { local: true });
+  fitTerminal(tab);
+  try {
+    await api.localTerminal.start({ id, profile: profile.id, cols: tab.term.cols, rows: tab.term.rows });
+    if (tabs.get(id) !== tab) {
+      sendTerminal(tab, { type: "disconnect" });
+      return;
+    }
+    if (tab.state !== "启动中") return;
+    tab.state = "已连接";
+    tab.term.options.disableStdin = false;
+    fitTerminal(tab);
+    if (current === id) activate(id);
+  } catch (error) {
+    if (tabs.get(id) !== tab) return;
+    closeTab(id);
+    toast(error.message.replace(/^Error invoking remote method '[^']+': Error: /, ""));
+  }
+}
+const workbenchMenu = $("#window-tools-options");
+const workbenchPages = {
+  main: $("#workbench-main"),
+  shells: $("#workbench-shells"),
+  defaults: $("#workbench-shell-defaults"),
+};
+const localProfiles = $("#local-terminal-profiles");
+const localDefaults = $("#local-terminal-defaults");
+const defaultChoices = $("#local-terminal-default-choices");
+let workbenchPage = "main";
+let workbenchRevision = 0;
+let savingDefaultShell = false;
+function showWorkbenchPage(next, focus) {
+  workbenchPage = next;
+  workbenchRevision++;
+  for (const [name, panel] of Object.entries(workbenchPages)) panel.hidden = name !== next;
+  if (focus) $(focus).focus();
+  workbenchMenu.scrollTop = 0;
+  return workbenchRevision;
+}
+function isCurrentWorkbench(revision) {
+  return revision === workbenchRevision && workbenchMenu.matches(":popover-open");
+}
+workbenchMenu.addEventListener("beforetoggle", (event) => {
+  if (event.newState !== "open") return;
+  const bounds = $("#window-tools-menu").getBoundingClientRect();
+  workbenchMenu.style.left = `min(${bounds.left}px, calc(100vw - var(--workbench-menu-width) - 8px))`;
+  workbenchMenu.style.top = `${bounds.bottom + 6}px`;
+  showWorkbenchPage("main");
+});
+workbenchMenu.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || workbenchPage === "main") return;
+  event.preventDefault();
+  if (workbenchPage === "defaults") showWorkbenchPage("shells", "#local-terminal-defaults");
+  else showWorkbenchPage("main", "#local-terminal-menu");
+});
+
+async function openPreferredLocalTerminal() {
+  workbenchMenu.hidePopover();
+  try {
+    const { available, selected } = await api.localTerminal.profiles();
+    const profile = available.find(({ id }) => id === selected);
+    if (profile) await openLocalTerminal(profile);
+    else toast("没有可用的本地 Shell");
+  } catch (error) { toast(error.message); }
+}
+function renderDefaultShell(preferred) {
+  const choices = [...defaultChoices.children];
+  const selected = choices.find(button => button.dataset.shell === preferred) || choices[0];
+  $("#local-terminal-default-label").textContent = selected.dataset.shell ? selected.dataset.name : "自动";
+  for (const button of choices) {
+    button.setAttribute("aria-pressed", String(button === selected));
+    button.lastElementChild.hidden = button !== selected;
+  }
+}
+async function saveDefaultShell(id) {
+  if (savingDefaultShell) return;
+  savingDefaultShell = true;
+  const revision = workbenchRevision;
+  try {
+    await api.localTerminal.setDefault(id);
+    if (isCurrentWorkbench(revision)) {
+      renderDefaultShell(id);
+      showWorkbenchPage("shells", "#local-terminal-defaults");
+    }
+  } catch (error) { toast(error.message); }
+  finally { savingDefaultShell = false; }
+}
+$("#local-terminal-open").onclick = openPreferredLocalTerminal;
+$("#local-terminal-back").onclick = () => showWorkbenchPage("main", "#local-terminal-menu");
+$("#local-terminal-default-back").onclick = () => showWorkbenchPage("shells", "#local-terminal-defaults");
+localDefaults.onclick = () => showWorkbenchPage("defaults", "#local-terminal-default-back");
+$("#local-terminal-menu").onclick = async () => {
+  const revision = showWorkbenchPage("shells", "#local-terminal-back");
+  localDefaults.disabled = true;
+  localProfiles.replaceChildren(el("span", "window-menu-label", "正在读取本地 Shell…"));
+  try {
+    const { available, preferred } = await api.localTerminal.profiles();
+    if (!isCurrentWorkbench(revision)) return;
+    const profiles = available.map(profile => {
+      const open = el("button", "", profile.name);
+      open.type = "button";
+      open.dataset.shell = profile.id;
+      open.onclick = () => {
+        workbenchMenu.hidePopover();
+        openLocalTerminal(profile);
+      };
+      return open;
+    });
+    localProfiles.replaceChildren(...(profiles.length ? profiles : [el("span", "window-menu-label", "没有可用的本地 Shell")]));
+    defaultChoices.replaceChildren(...[{ id: "", name: "自动选择" }, ...available].map(({ id, name }) => {
+      const choice = el("button", "", name);
+      choice.type = "button";
+      choice.dataset.shell = id;
+      choice.dataset.name = name;
+      const check = el("span", "", "✓");
+      check.setAttribute("aria-hidden", "true");
+      choice.append(check);
+      choice.onclick = () => saveDefaultShell(id);
+      return choice;
+    }));
+    renderDefaultShell(preferred);
+    localDefaults.disabled = false;
+  } catch (error) {
+    if (isCurrentWorkbench(revision)) localProfiles.replaceChildren(el("span", "window-menu-label", error.message));
+  }
+};
 async function duplicateTab(tab) {
-  if (!tab || tab.moving || tab.duplicating || tab.state !== "已连接") return;
+  if (!tab || tab.local || tab.moving || tab.duplicating || tab.state !== "已连接") return;
   tab.duplicating = true;
   try {
     const directory = await api.shellDirectory(tab.id).catch(() => null) || tab.shellDirectory;
@@ -495,7 +732,7 @@ async function terminalClipboard(t, action) {
     toast(error.message);
   }
 }
-function createTerminal(session, id, { moving = false } = {}) {
+function createTerminal(session, id, { moving = false, local = false } = {}) {
   const pane = el("div", "terminal-pane");
   const viewport = el("div", "terminal-viewport");
   pane.append(viewport);
@@ -507,6 +744,7 @@ function createTerminal(session, id, { moving = false } = {}) {
     scrollback: 3000,
     cursorBlink: false,
     theme: theme.terminal,
+    disableStdin: local,
     // xterm's search and keyword decorations use its buffer/marker API.
     allowProposedApi: true,
   });
@@ -515,22 +753,23 @@ function createTerminal(session, id, { moving = false } = {}) {
   term.open(viewport);
   const tab = {
     moving,
+    local,
     group,
     id,
     session,
     term,
     fit,
     pane,
-    state: "连接中",
+    state: local ? "启动中" : "连接中",
     encoding: session.encoding || "utf-8",
     path: ".",
     files: [],
     loadVersion: 0,
   };
   if (highlightKeywords) tab.highlights = installKeywordHighlights(term, theme);
-  if (quickPasswordsEnabled) tab.passwordPrompt = quickPasswords.watch(tab);
-  tab.echo = installTerminalEcho(tab, predictiveEcho);
-  term.parser.registerOscHandler(7, (value) => {
+  if (!local && quickPasswordsEnabled) tab.passwordPrompt = quickPasswords.watch(tab);
+  if (!local) tab.echo = installTerminalEcho(tab, predictiveEcho);
+  if (!local) term.parser.registerOscHandler(7, (value) => {
     const match = /^file:\/\/([^/]*)(\/[^\x00-\x1f]*)$/.exec(value);
     if (!match) return true;
     const [, host, path] = match;
@@ -553,8 +792,8 @@ function createTerminal(session, id, { moving = false } = {}) {
   });
   tabs.set(id, tab);
   pane.addEventListener("focusin", () => {
-    if (current !== id && !fileWorkspaceOpen && tab.group.shown === id)
-      activate(id, false);
+    if (current !== tab.id && !fileWorkspaceOpen && tab.group.shown === tab.id)
+      activate(tab.id, false);
   });
   // Clipboard operations are available only through the terminal context menu.
   // Keep ordinary terminal keys (Ctrl+C, Vim Ctrl+V, etc.) untouched.
@@ -568,25 +807,27 @@ function createTerminal(session, id, { moving = false } = {}) {
     event.preventDefault();
     api
       .clipboardMenu({
-        id,
+        id: tab.id,
         hasSelection: term.hasSelection(),
         canPaste: tab.state === "已连接" && !tab.moving,
       })
       .catch((error) => toast(error.message));
   };
   term.onData((data) => {
-    if (quickPasswordsEnabled) quickPasswords.userInput(tab);
-    tab.echo.input(data);
-    if (!tab.moving) api.send({ type: "input", id, data });
+    if (!local && quickPasswordsEnabled) quickPasswords.userInput(tab);
+    tab.echo?.input(data);
+    if (!tab.moving && (!local || tab.state === "已连接")) sendTerminal(tab, { type: "input", data });
   });
   term.onResize(
     ({ cols, rows }) =>
-      !tab.moving && api.send({ type: "resize", id, cols, rows }),
+      !tab.moving && (!local || tab.state === "已连接") && sendTerminal(tab, { type: "resize", cols, rows }),
   );
   if (!moving) {
     activate(id);
-    setMode("files");
-    term.writeln("\x1b[32m正在连接 " + session.host + "…\x1b[0m");
+    if (!local) {
+      setMode("files");
+      term.writeln("\x1b[32m正在连接 " + session.host + "…\x1b[0m");
+    }
   }
   return tab;
 }
@@ -694,7 +935,7 @@ function syncGroups() {
   $("#terminal-area").dataset.count = groups.length;
   $("#split-add").disabled =
     !tabs.size || groups.length >= 4;
-  $("#file-workspace-toggle").disabled = !tabs.size && !fileWorkspaceOpen;
+  $("#file-workspace-toggle").disabled = !fileWorkspaceOpen && ![...tabs.values()].some(tab => !tab.local);
   for (const [index, group] of groups.entries()) {
     group.root.classList.toggle("focused", group === focusedGroup);
     group.nav.setAttribute("aria-label", `分屏 ${index + 1} 的终端标签`);
@@ -721,7 +962,7 @@ function createTabElement(tab) {
   const close = el("button", "close", "×");
   select.type = close.type = "button";
   select.append(el("span", "dot"), label);
-  close.title = "关闭连接";
+  close.title = tab.local ? "关闭本地终端" : "关闭连接";
   close.setAttribute("aria-label", "关闭 " + tab.session.name);
   close.onclick = (event) => {
     event.stopPropagation();
@@ -731,19 +972,18 @@ function createTabElement(tab) {
   element.onclick = () => activate(tab.id);
   element.oncontextmenu = (event) => {
     event.preventDefault();
+    if (tab.local) return;
     api.tabMenu(tab.id).catch((error) => toast(error.message));
   };
   element.onkeydown = (event) => {
-    if (
+    if (!tab.local && (
       event.key === "ContextMenu" ||
       (event.shiftKey && event.key === "F10")
-    ) {
+    )) {
       event.preventDefault();
       api.tabMenu(tab.id).catch((error) => toast(error.message));
     }
   };
-  element.dataset.connection = tab.id;
-  element.title = tab.session.name + " · 可拖到其他分屏";
   element.ondragstart = (event) => {
     if (tab.moving || event.target.closest(".close")) {
       event.preventDefault();
@@ -752,11 +992,25 @@ function createTabElement(tab) {
     event.dataTransfer.setData(terminalDragType, tab.id);
     event.dataTransfer.effectAllowed = "move";
   };
-  return { element, select };
+  return { element, select, label, close };
+}
+function renderTabIndicator(tab) {
+  if (!tab.header) return;
+  const { element, select, label, close } = tab.header;
+  const state = tab.state === "已连接" ? "ready" : tab.state === "连接出错" ? "error"
+    : ["已断开", "已退出"].includes(tab.state) ? "closed" : "connecting";
+  const status = tab.local && state === "ready" ? "运行中" : tab.state;
+  element.dataset.connectionState = state;
+  element.dataset.connection = tab.id;
+  element.title = `${tab.session.name} · ${status}`;
+  select.setAttribute("aria-label", element.title);
+  label.textContent = tab.session.name;
+  close.setAttribute("aria-label", "关闭 " + tab.session.name);
 }
 function renderTabs() {
   for (const tab of tabs.values()) {
     tab.header ??= createTabElement(tab);
+    renderTabIndicator(tab);
     const { element, select } = tab.header;
     if (element.parentElement !== tab.group.nav) tab.group.nav.append(element);
     const visible = tab.group.shown === tab.id;
@@ -779,9 +1033,8 @@ function fitTerminal(t) {
   // fit() emits nothing when the geometry is unchanged. Always resync a ready
   // shell, including the first fit that happened before SSH finished opening.
   if (t.state === "已连接")
-    api.send({
+    sendTerminal(t, {
       type: "resize",
-      id: t.id,
       cols: t.term.cols,
       rows: t.term.rows,
     });
@@ -796,9 +1049,12 @@ function activate(id, focus = true) {
   }
   syncGroups();
   api.windowTitle(t?.session.name || "工作空间");
-  $("#focused-sftp").textContent = t ? t.session.name : "SFTP";
-  $("#move-tab").disabled = !t || t.moving || t.state !== "已连接";
-  $("#terminal-encoding").disabled = !t;
+  const remote = sshTab(t);
+  $("#focused-sftp").textContent = remote?.session.name || "SFTP";
+  $("#move-tab").disabled = !remote || remote.moving || remote.state !== "已连接";
+  $("#mode-files").disabled = !!t?.local;
+  $("#cwd-help").disabled = !!t?.local;
+  $("#terminal-encoding").disabled = remote?.state !== "已连接";
   $("#terminal-encoding").value = t?.encoding || "utf-8";
   $("#welcome").classList.toggle("hidden", tabs.size > 0 || fileWorkspaceOpen);
   $("#connected").classList.toggle("hidden", !tabs.size && !fileWorkspaceOpen);
@@ -810,16 +1066,19 @@ function activate(id, focus = true) {
   terminalSearch.activate();
   quickPasswords.activate();
   if (t) {
+    setMode(sidebarMode);
     if (!fileWorkspaceOpen)
       requestAnimationFrame(() => {
         if (current !== t.id || fileWorkspaceOpen) return;
         fitTerminal(t);
         if (focus) t.term.focus();
       });
-    $("#status").textContent =
-      `${t.session.username}@${t.session.host} · ${t.state}`;
-    $("#remote-path").value = t.path;
-    renderSidebarFiles(t);
+    $("#status").textContent = t.local
+      ? `${t.session.name} · ${t.state === "已连接" ? "运行中" : t.state}`
+      : `${t.session.username}@${t.session.host} · ${t.state}`;
+    $("#remote-path").value = remote?.path || "";
+    if (remote) renderSidebarFiles(remote);
+    else $("#file-list").replaceChildren();
   } else {
     $("#status").textContent = "就绪";
     $("#file-list").replaceChildren(el("div", "empty", "请先连接一台服务器。"));
@@ -834,12 +1093,12 @@ function closeTab(id, disconnect = true) {
     toast("会话正在移动，请稍后关闭");
     return;
   }
-  if (disconnect) api.send({ type: "disconnect", id });
+  if (disconnect) sendTerminal(t, { type: "disconnect" });
   clearCwdQuery(t);
   terminalSearch.remove(t);
   t.highlights?.dispose();
   t.passwordPrompt?.dispose();
-  t.echo.dispose();
+  t.echo?.dispose();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
@@ -878,7 +1137,7 @@ const terminalResize = new ResizeObserver(() => {
   });
 });
 api.onEvent((m) => {
-  const t = tabs.get(m.id);
+  const t = sshTab(tabs.get(m.id));
   if (!t) return;
   if (m.type === "data") {
     const bytes = Uint8Array.from(atob(m.data), (c) => c.charCodeAt(0));
@@ -889,23 +1148,39 @@ api.onEvent((m) => {
     });
   } else if (m.type === "ready") {
     t.state = "已连接";
+    t.term.options.disableStdin = t.moving;
+    renderTabIndicator(t);
     fitTerminal(t);
     loadFiles(t, m.directory || ".");
     if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
     if (current === t.id) activate(t.id);
   } else if (m.type === "closed" || m.type === "error") {
+    if (m.type === "closed" && t.state === "连接出错") return;
     t.echo.reset();
-    clearCwdQuery(t);
     t.state = m.type === "closed" ? "已断开" : "连接出错";
+    t.term.options.disableStdin = true;
+    resetRemoteView(t, "SSH 已断开，可右键标签刷新终端。");
+    renderTabIndicator(t);
     quickPasswords.activate();
     if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
     t.term.writeln("\r\n\x1b[31m" + (m.message || "连接已关闭") + "\x1b[0m");
-    if (current === t.id)
-      $("#status").textContent =
-        `${t.session.username}@${t.session.host} · ${t.state}`;
+    if (current === t.id) activate(t.id, false);
   } else if (m.type === "progress" && (t.transferring || t.localDragging)) {
     const text = `${m.files || 0} 个文件完成 · ${m.name?.split("/").pop() || ""} ${m.total ? Math.round((m.current / m.total) * 100) : 0}%`;
     showTransfer(t, text);
+  }
+});
+api.localTerminal.onEvent(({ id, type, data, exitCode }) => {
+  const tab = tabs.get(id);
+  if (!tab?.local) return;
+  if (type === "data") {
+    tab.term.write(data, () => sendTerminal(tab, { type: "ack", length: data.length }));
+  } else if (type === "exit") {
+    tab.state = "已退出";
+    tab.term.options.disableStdin = true;
+    renderTabIndicator(tab);
+    tab.term.writeln(`\r\n\x1b[90m本地 Shell 已退出（退出码 ${exitCode}）。\x1b[0m`);
+    if (current === id) activate(id, false);
   }
 });
 function size(n) {
@@ -1054,6 +1329,7 @@ function renderFiles(t, list) {
   }
 }
 async function loadFiles(t, path, { keepOnError = false } = {}) {
+  if (t.state !== "已连接" || t.moving || t.local) return false;
   const v = ++t.loadVersion;
   t.loading = true;
   t.workspaceDirectoryNote = "";
@@ -1097,23 +1373,26 @@ function showTransfer(t, message) {
 }
 async function deleteRemote(tab, path) {
   if (tab.transferring || tab.removing) return toast("请等待当前文件操作完成");
+  const id = tab.id;
   tab.removing = true;
   if (current === tab.id) renderSidebarFiles(tab);
   if (fileWorkspaceOpen) renderWorkspaceFiles(tab.group);
   try {
-    const result = await api.removeRemote({ id: tab.id, path });
-    if (!result.cancelled) {
+    const result = await api.removeRemote({ id, path });
+    if (tabs.get(id) === tab && !result.cancelled) {
       showTransfer(tab, `已删除 ${result.files} 个文件、${result.directories} 个目录`);
       await loadFiles(tab, tab.path);
     }
   } catch (error) {
-    toast(error.message);
-    showTransfer(tab, "删除失败：" + error.message);
-    // A recursive delete may have completed some entries before an error.
-    await loadFiles(tab, tab.path);
+    if (tabs.get(id) === tab) {
+      toast(error.message);
+      showTransfer(tab, "删除失败：" + error.message);
+      // A recursive delete may have completed some entries before an error.
+      await loadFiles(tab, tab.path);
+    }
   } finally {
-    tab.removing = false;
-    if (tabs.has(tab.id)) {
+    if (tabs.get(id) === tab) {
+      tab.removing = false;
       if (current === tab.id) renderSidebarFiles(tab);
       if (fileWorkspaceOpen) renderWorkspaceFiles(tab.group);
     }
@@ -1127,20 +1406,23 @@ async function transfer(
   files = null,
   token = null,
 ) {
-  const tab = tabs.get(t.id);
-  if (!tab || tab.transferring || tab.removing) {
+  const id = t.id;
+  const tab = tabs.get(id);
+  if (tab?.state !== "已连接" || tab.local || tab.moving) return toast("请先连接 SSH");
+  if (tab.transferring || tab.removing) {
     toast("请等待当前传输完成");
     return;
   }
   tab.transferring = true;
   showTransfer(t, "准备传输…");
   try {
-    const request = { id: t.id, path };
+    const request = { id, path };
     const r = token
       ? await api.relay({ ...request, token })
       : files
         ? await api.drop(request, files)
         : await api.transfer({ ...request, action, directory });
+    if (tabs.get(id) !== tab) return;
     showTransfer(
       t,
       r?.cancelled
@@ -1150,10 +1432,12 @@ async function transfer(
     if (!r?.cancelled && (token || files || action.startsWith("upload")))
       loadFiles(t, t.path);
   } catch (error) {
-    toast(error.message);
-    showTransfer(t, "传输失败：" + error.message);
+    if (tabs.get(id) === tab) {
+      toast(error.message);
+      showTransfer(t, "传输失败：" + error.message);
+    }
   } finally {
-    tab.transferring = false;
+    if (tabs.get(id) === tab) tab.transferring = false;
   }
 }
 const remoteTokenPrefix = "jayxterm-sftp:";
@@ -1228,15 +1512,15 @@ function addFileDropZone(zone, list, getEntry) {
       transfer(t, "upload", to, false, files, token);
   });
 }
-addFileDropZone($("#files-panel"), $("#file-list"), () => tabs.get(current));
+addFileDropZone($("#files-panel"), $("#file-list"), activeSshTab);
 $("#upload-file").onclick = () => {
   $("#upload-options").hidePopover();
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (t) transfer(t, "upload", t.path);
 };
 $("#upload-directory").onclick = () => {
   $("#upload-options").hidePopover();
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (t) transfer(t, "upload-directory", t.path);
 };
 function clearCwdQuery(tab) {
@@ -1278,7 +1562,7 @@ function cwdCommand(host) {
   ].join(" ");
 }
 $("#sync-cwd").onclick = () => {
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (t?.state !== "已连接" || t.moving) {
     toast("请先连接 SSH");
     return;
@@ -1320,15 +1604,15 @@ $("#cwd-query").onclick = () => {
 };
 $("#path-form").onsubmit = (e) => {
   e.preventDefault();
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (t) loadFiles(t, $("#remote-path").value);
 };
 $("#up").onclick = () => {
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (t) loadFiles(t, remoteJoin(t.path, ".."));
 };
 $("#refresh").onclick = () => {
-  const t = tabs.get(current);
+  const t = activeSshTab();
   if (t) loadFiles(t, t.path);
 };
 function createWorkspacePanel(group) {
@@ -1353,7 +1637,7 @@ function createWorkspacePanel(group) {
   root.append(form, list, status, empty);
   group.body.append(root);
 
-  const tab = () => tabs.get(group.shown);
+  const tab = () => sshTab(tabs.get(group.shown));
   const focusGroup = () => {
     if (focusedGroup === group) return;
     focusedGroup = group;
@@ -1385,7 +1669,7 @@ function renderWorkspaceFiles(group) {
   const panel = group.filePanel;
   if (!panel) return;
   const tab = tabs.get(group.shown);
-  const ready = tab?.state === "已连接" && !tab.moving;
+  const ready = !tab?.local && tab?.state === "已连接" && !tab.moving;
   const previous = panel.rendered;
   const state = { tab, ready, path: tab?.path, files: tab?.files, loading: tab?.loading,
     status: tab?.state, removing: tab?.removing, directoryNote: tab?.workspaceDirectoryNote };
@@ -1397,7 +1681,7 @@ function renderWorkspaceFiles(group) {
   panel.empty.classList.toggle("hidden", ready);
   panel.empty.textContent = tab?.moving
     ? "会话正在移动…"
-    : tab?.state || "拖入终端标签，或在左侧连接会话";
+    : tab?.local ? "此分屏是本地终端" : tab?.state || "拖入终端标签，或在左侧连接会话";
   if (!ready) {
     panel.list.replaceChildren();
     return;
@@ -1408,7 +1692,7 @@ function renderWorkspaceFiles(group) {
   renderFiles(tab, panel.list);
 }
 async function syncWorkspaceDirectory(tab) {
-  if (tab?.state !== "已连接" || tab.moving || tab.group.shown !== tab.id ||
+  if (tab?.state !== "已连接" || tab.local || tab.moving || tab.group.shown !== tab.id ||
       tab.workspaceSyncVersion === fileWorkspaceVersion) return;
   const version = fileWorkspaceVersion;
   tab.workspaceSyncVersion = version;
@@ -1458,7 +1742,7 @@ $("#file-workspace-toggle").onclick = () => toggleFileWorkspace();
 function markMoving(t, moving) {
   t.echo.reset();
   t.moving = moving;
-  t.term.options.disableStdin = moving;
+  t.term.options.disableStdin = moving || t.state !== "已连接";
   t.pane.classList.toggle("moving", moving);
   quickPasswords.activate();
   if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
@@ -1472,6 +1756,10 @@ api.onWindow(async (m) => {
   }
   if (m.type === "duplicate-tab") {
     await duplicateTab(tabs.get(m.id));
+    return;
+  }
+  if (m.type === "refresh-tab") {
+    await refreshTerminal(tabs.get(m.id));
     return;
   }
   if (m.type === "local-drag-status") {
@@ -1729,7 +2017,7 @@ $("#export-openssh").onclick = async () => {
 };
 $("#move-tab").onclick = async () => {
   $("#window-tools-options").hidePopover();
-  if (current)
+  if (activeSshTab())
     try {
       await api.moveTab({ id: current });
     } catch (e) {
@@ -1750,7 +2038,7 @@ $("#window-picker").onclick = async () => {
       $("#windows-dialog").close();
     };
     row.append(focus);
-    if (w.id !== windowId && current) {
+    if (w.id !== windowId && activeSshTab()) {
       const move = el("button", "", "移到此窗口");
       move.onclick = async () => {
         const id = current;
@@ -1768,30 +2056,27 @@ $("#window-picker").onclick = async () => {
   $("#windows-dialog").showModal();
 };
 $("#windows-close").onclick = () => $("#windows-dialog").close();
-document.addEventListener("keydown", (e) => {
-  if (
-    e.ctrlKey &&
-    (e.code === "PageDown" || e.code === "PageUp") &&
-    !document.querySelector("dialog[open]")
-  ) {
-    e.preventDefault();
-    const ids = [...tabs.values()]
-      .filter((tab) => tab.group === focusedGroup)
-      .map((tab) => tab.id);
-    if (ids.length) {
-      const next =
-        (ids.indexOf(current) + (e.code === "PageDown" ? 1 : -1) + ids.length) %
-        ids.length;
-      activate(ids[next]);
-    }
-  } else if (e.ctrlKey && e.shiftKey && e.code === "KeyN") {
-    e.preventDefault();
-    api.newWindow();
-  } else if (e.ctrlKey && e.shiftKey && e.code === "KeyO") {
-    e.preventDefault();
-    $("#window-picker").click();
-  }
-});
+function activateAdjacentTab(step) {
+  const ids = [...tabs.values()].filter(tab => tab.group === focusedGroup).map(tab => tab.id);
+  if (ids.length) activate(ids[(ids.indexOf(current) + step + ids.length) % ids.length]);
+}
+const shortcutActions = {
+  openLocalTerminal: openPreferredLocalTerminal,
+  newWindow: () => api.newWindow().catch(error => toast(error.message)),
+  switchWindow: () => $("#window-picker").click(),
+  previousTab: () => activateAdjacentTab(-1),
+  nextTab: () => activateAdjacentTab(1),
+};
+document.addEventListener("keydown", (event) => {
+  const binding = shortcutFromEvent(event);
+  if (!binding || document.querySelector("dialog[open]")) return;
+  const match = Object.entries(commandShortcuts).find(([, value]) => value === binding);
+  if (!match) return;
+  const [command] = match;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!event.repeat || command === "previousTab" || command === "nextTab") shortcutActions[command]();
+}, true);
 const { id: windowId, number: windowNumber } = await api.windowReady();
 $("#window-label").textContent = "窗口 " + windowNumber;
 try {

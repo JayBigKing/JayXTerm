@@ -33,6 +33,8 @@ jobs:
           JAYXTERM_SETTINGS_QA: '1'
           JAYXTERM_FEATURES_QA: '1'
           JAYXTERM_ASSIST_QA: '1'
+          JAYXTERM_LOCAL_TERMINAL_QA: '1'
+          JAYXTERM_RECONNECT_QA: '1'
         run: ./scripts/windows.ps1 smoke
       - name: Package Windows x64
         if: github.event_name == 'workflow_dispatch'
@@ -85,6 +87,11 @@ jobs:
           npm test
       - name: Build renderer
         run: npm run build
+      - name: macOS local terminal smoke test
+        env:
+          JAYXTERM_LOCAL_TERMINAL_QA: '1'
+          JAYXTERM_RECONNECT_QA: '1'
+        run: ./node_modules/.bin/electron scripts/smoke.cjs
       - name: Build and verify Finder drag module when available
         run: |
           if [[ -f scripts/build-finder-drag.cjs ]]; then

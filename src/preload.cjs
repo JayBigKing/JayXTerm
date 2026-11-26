@@ -17,6 +17,17 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.on("window:event", listener);
     return () => ipcRenderer.removeListener("window:event", listener);
   },
+  localTerminal: {
+    profiles: () => ipcRenderer.invoke("local-terminal:profiles"),
+    setDefault: (id) => ipcRenderer.invoke("local-terminal:default", id),
+    start: (request) => ipcRenderer.invoke("local-terminal:start", request),
+    send: (message) => ipcRenderer.send("local-terminal:send", message),
+    onEvent: (callback) => {
+      const listener = (_event, message) => callback(message);
+      ipcRenderer.on("local-terminal:event", listener);
+      return () => ipcRenderer.removeListener("local-terminal:event", listener);
+    },
+  },
   sessions: () => ipcRenderer.invoke("sessions:list"),
   previewSessionImport: (format) => ipcRenderer.invoke("sessions:import-preview", format),
   applySessionImport: (preview) => ipcRenderer.invoke("sessions:import-apply", preview),

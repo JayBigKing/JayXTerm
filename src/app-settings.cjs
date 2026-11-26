@@ -3,6 +3,7 @@ const path = require("node:path");
 const { createHmac, randomBytes, randomUUID } = require("node:crypto");
 const { openStore } = require("./store.cjs");
 const { terminalDefaults, terminalEncodings, validFontFamily, validCjkFontFamily, validFontSize } = require("./terminal-settings.mjs");
+const { readShortcuts, updateShortcuts } = require("./shortcuts.mjs");
 
 const cacheFolders = ["Cache", "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "ShaderCache"];
 const defaultBackground = "#394351";
@@ -121,6 +122,7 @@ function openAppSettings(file, defaultCache, safeStorage) {
   function settings() {
     const { backgroundColor: previousBackground, ...saved } = store.get();
     const data = { ...defaults, ...saved };
+    data.shortcuts = readShortcuts(data.shortcuts);
     if (!validFontFamily(data.fontFamily)) data.fontFamily = terminalDefaults.fontFamily;
     if (!validCjkFontFamily(data.cjkFontFamily)) data.cjkFontFamily = terminalDefaults.cjkFontFamily;
     if (!validFontSize(data.fontSize)) data.fontSize = terminalDefaults.fontSize;
@@ -153,6 +155,13 @@ function openAppSettings(file, defaultCache, safeStorage) {
     return index;
   }
   return {
+    getLocalShellProfile() {
+      const id = store.get().localShellProfile;
+      return typeof id === "string" ? id : "";
+    },
+    setLocalShellProfile(id) {
+      store.write({ ...store.get(), localShellProfile: id });
+    },
     initializeCache({ restoreWindowsKey = false } = {}) {
       const data = settings();
       if (restoreWindowsKey && data.cachePath) {
@@ -189,22 +198,23 @@ function openAppSettings(file, defaultCache, safeStorage) {
     describe() {
       const { cachePath, pendingCache, cacheError, saveHistory, fileOpen, workspaceBackground,
         fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, terminalSearchEnabled, quickPasswordsEnabled,
-        predictiveEcho } = settings();
+        predictiveEcho, shortcuts } = settings();
       return {
         cachePath, pendingCache: pendingCache?.path ?? null, cacheError, saveHistory, fileOpen, defaultCache,
         backgroundColor: validBackground(workspaceBackground) ? workspaceBackground : defaultBackground,
         defaultBackground,
         fontFamily, cjkFontFamily, fontSize, defaultEncoding, highlightKeywords, terminalSearchEnabled, quickPasswordsEnabled,
-        predictiveEcho,
+        predictiveEcho, shortcuts,
       };
     },
-    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, cjkFontFamily, fontSize, defaultEncoding, ...toggles }) {
+    apply({ cachePath, migrate, saveHistory, fileOpen, backgroundColor, fontFamily, cjkFontFamily, fontSize, defaultEncoding, shortcuts, ...toggles }) {
       if ((fontFamily !== undefined && !validFontFamily(fontFamily)) ||
           (cjkFontFamily !== undefined && !validCjkFontFamily(cjkFontFamily)) ||
           (fontSize !== undefined && !validFontSize(fontSize)) ||
           (defaultEncoding !== undefined && !terminalEncodings.includes(defaultEncoding)))
         throw new Error("无效的终端设置：字号范围为 8–48，编码为 UTF-8、GBK 或 GB2312");
       const data = settings();
+      if (shortcuts !== undefined) data.shortcuts = updateShortcuts(data.shortcuts, shortcuts);
       for (const name of terminalToggles) {
         if (toggles[name] === undefined) continue;
         if (typeof toggles[name] !== "boolean") throw new Error("无效的终端功能开关");
