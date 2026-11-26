@@ -16,7 +16,7 @@
     "dev": "npm run build && electron .",
     "test": "node --test src/*.test.cjs",
     "build:drag": "node scripts/build-drag-out.cjs",
-    "dist:win": "npm run build && npm run build:drag && electron-builder --win --x64",
+    "dist:win": "npm run build && npm run build:drag && electron-builder --win --x64 --publish never",
     "build:finder-drag": "node scripts/build-finder-drag.cjs",
     "dist:mac": "npm run build && npm run build:finder-drag && electron-builder --mac dmg"
   },

@@ -35,6 +35,8 @@ let defaultEncoding = terminalDefaults.defaultEncoding;
 let highlightKeywords = false;
 let quickPasswordsEnabled = false;
 let predictiveEcho = true;
+let copyOnSelect = terminalDefaults.copyOnSelect;
+let ctrlVPaste = terminalDefaults.ctrlVPaste;
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -46,6 +48,13 @@ function toast(message) {
   $("#toast").style.display = "block";
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => ($("#toast").style.display = "none"), 6000);
+}
+function copiedNotice(text) {
+  const notice = $("#clipboard-notice");
+  notice.textContent = `已复制 ${Array.from(text).length} 字符`;
+  notice.hidden = false;
+  clearTimeout(copiedNotice.timer);
+  copiedNotice.timer = setTimeout(() => { notice.hidden = true; }, 1800);
 }
 function renderBackground(color) {
   theme = applyTheme(color);
@@ -106,6 +115,8 @@ function updateSettings(settings) {
     if (quickPasswordsEnabled) quickPasswords.activate();
   }
   predictiveEcho = settings.predictiveEcho;
+  copyOnSelect = settings.copyOnSelect;
+  ctrlVPaste = settings.ctrlVPaste;
   for (const tab of tabs.values()) tab.echo.setEnabled(predictiveEcho);
   defaultEncoding = settings.defaultEncoding;
   if (fileOpen === settings.fileOpen) return;
@@ -431,26 +442,49 @@ $("#password-cancel").onclick = () => {
   passwordResolve?.(null);
   passwordResolve = null;
 };
-async function connect(session) {
-  let password;
-  if (!session.hasPassword) {
-    $("#password-host").textContent = `${session.username}@${session.host}`;
-    $("#connect-password").value = "";
-    $("#password-dialog").showModal();
-    loadConnectHistory();
-    password = await new Promise((r) => (passwordResolve = r));
-    if (password === null) return;
-  }
+async function connect(session, replacing = null) {
   try {
+    let password;
+    if (!session.hasPassword) {
+      if ($("#password-dialog").open) return;
+      $("#password-host").textContent = `${session.username}@${session.host}`;
+      $("#connect-password").value = "";
+      $("#password-dialog").showModal();
+      loadConnectHistory();
+      password = await new Promise((r) => (passwordResolve = r));
+      if (password === null) return;
+    }
+    if (replacing && tabs.get(replacing.id) !== replacing) return;
     const id = await api.connect({
       sessionId: session.id,
       password,
-      cols: 100,
-      rows: 30,
+      encoding: session.encoding,
+      cols: replacing?.term.cols || 100,
+      rows: replacing?.term.rows || 30,
     });
-    createTerminal(session, id);
+    // Closing a tab while its connection request is pending must not reopen it.
+    if (replacing && tabs.get(replacing.id) !== replacing) {
+      api.send({ type: "disconnect", id });
+      return;
+    }
+    createTerminal(session, id, { replacing });
   } catch (e) {
     toast(e.message);
+  }
+}
+function isDisconnected(tab) {
+  return tab.state === "已断开" || tab.state === "连接出错";
+}
+async function reconnectTab(tab) {
+  if (tabs.get(tab.id) !== tab || tab.moving || tab.reconnecting || !isDisconnected(tab)) return;
+  tab.reconnecting = true;
+  renderTabs();
+  try {
+    const session = sessions.find((session) => session.id === tab.session.id) || tab.session;
+    await connect({ ...session, encoding: tab.encoding }, tab);
+  } finally {
+    tab.reconnecting = false;
+    renderTabs();
   }
 }
 async function duplicateTab(tab) {
@@ -473,33 +507,36 @@ async function duplicateTab(tab) {
     tab.duplicating = false;
   }
 }
-async function terminalClipboard(t, action) {
-  if (!t || !tabs.has(t.id) || t.moving) return;
+async function terminalClipboard(t, action, automatic = false) {
+  if (!t || tabs.get(t.id) !== t || t.moving) return;
   try {
     if (action === "copy") {
       const text = t.term.getSelection();
-      if (text) await api.writeClipboard(text);
+      if (text) {
+        await api.writeClipboard(text);
+        if (automatic) copiedNotice(text);
+      }
     } else if (action === "paste") {
-      if (t.state !== "已连接") return;
+      if (t.state !== "已连接" || t.term.options.disableStdin) return;
       const text = await api.readClipboard();
-      if (!tabs.has(t.id) || t.moving || t.term.options.disableStdin) return;
+      if (tabs.get(t.id) !== t || t.moving || t.state !== "已连接" || t.term.options.disableStdin) return;
       // xterm's paste API honors bracketed-paste mode and normalizes line breaks.
       // It uses the same onData path as typing, including GBK input conversion.
-      if (text) {
+      if (typeof text === "string" && text) {
         t.term.clearSelection();
         t.term.paste(text);
       }
     } else if (action === "select-all") t.term.selectAll();
-    t.term.focus();
+    if (!automatic && tabs.get(t.id) === t) t.term.focus();
   } catch (error) {
     toast(error.message);
   }
 }
-function createTerminal(session, id, { moving = false } = {}) {
+function createTerminal(session, id, { moving = false, replacing = null } = {}) {
   const pane = el("div", "terminal-pane");
   const viewport = el("div", "terminal-viewport");
   pane.append(viewport);
-  const group = focusedGroup || addGroup();
+  const group = replacing?.group || focusedGroup || addGroup();
   group.body.append(pane);
   const term = new Terminal({
     ...fontOptions,
@@ -556,14 +593,39 @@ function createTerminal(session, id, { moving = false } = {}) {
     if (current !== id && !fileWorkspaceOpen && tab.group.shown === id)
       activate(id, false);
   });
-  // Clipboard operations are available only through the terminal context menu.
-  // Keep ordinary terminal keys (Ctrl+C, Vim Ctrl+V, etc.) untouched.
+  pane.addEventListener("dblclick", (event) => {
+    if (event.button === 0) void reconnectTab(tab);
+  });
+  // Handle clipboard access explicitly to avoid a second browser paste and
+  // preserve Ctrl+C and, when its paste setting is off, terminal Ctrl+V.
   const blockBrowserClipboard = (event) => {
     event.preventDefault();
     event.stopImmediatePropagation();
   };
   pane.addEventListener("copy", blockBrowserClipboard, true);
   pane.addEventListener("paste", blockBrowserClipboard, true);
+  term.attachCustomKeyEventHandler((event) => {
+    if (!ctrlVPaste || !event.ctrlKey || event.shiftKey || event.altKey || event.metaKey ||
+        event.isComposing || event.key.toLowerCase() !== "v") return true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "keydown" && !event.repeat) void terminalClipboard(tab, "paste");
+    return false;
+  });
+  // Copy only a mouse selection, after xterm has handled mouseup on document.
+  // Programmatic selections (search, restored tabs, output) must not copy.
+  tab.clipboardEvents = new AbortController();
+  const { signal } = tab.clipboardEvents;
+  let selecting = false;
+  pane.addEventListener("mousedown", (event) => {
+    if (event.button === 0 && event.target.closest(".xterm-screen")) selecting = true;
+  }, { capture: true, signal });
+  window.addEventListener("mouseup", (event) => {
+    if (event.button !== 0 || !selecting) return;
+    selecting = false;
+    if (copyOnSelect) void terminalClipboard(tab, "copy", true);
+  }, { signal });
+  window.addEventListener("blur", () => { selecting = false; }, { signal });
   pane.oncontextmenu = (event) => {
     event.preventDefault();
     api
@@ -583,9 +645,23 @@ function createTerminal(session, id, { moving = false } = {}) {
     ({ cols, rows }) =>
       !tab.moving && api.send({ type: "resize", id, cols, rows }),
   );
+  if (replacing) {
+    // Replace the old terminal in place, including an inactive tab in another
+    // split. A fresh connection ID keeps late SSH/SFTP events on the old tab.
+    replacing.pane.before(pane);
+    tab.header = createTabElement(tab);
+    replacing.header.element.before(tab.header.element);
+    if (group.shown === replacing.id) group.shown = id;
+    if (current === replacing.id) current = id;
+    closeTab(replacing.id);
+  }
   if (!moving) {
-    activate(id);
-    setMode("files");
+    if (!replacing || current === id) {
+      activate(id);
+      setMode("files");
+    } else {
+      requestAnimationFrame(() => fitTerminal(tab));
+    }
     term.writeln("\x1b[32m正在连接 " + session.host + "…\x1b[0m");
   }
   return tab;
@@ -718,17 +794,28 @@ function createTabElement(tab) {
   const element = el("div", "tab");
   const select = el("button", "tab-select");
   const label = el("span", "tab-name", tab.session.name);
+  const reconnect = el("button", "tab-reconnect", "↻");
   const close = el("button", "close", "×");
-  select.type = close.type = "button";
+  select.type = reconnect.type = close.type = "button";
   select.append(el("span", "dot"), label);
+  reconnect.title = "重新连接";
+  reconnect.setAttribute("aria-label", "重新连接 " + tab.session.name);
+  reconnect.onclick = (event) => {
+    event.stopPropagation();
+    void reconnectTab(tab);
+  };
   close.title = "关闭连接";
   close.setAttribute("aria-label", "关闭 " + tab.session.name);
   close.onclick = (event) => {
     event.stopPropagation();
     closeTab(tab.id);
   };
-  element.append(select, close);
+  element.append(select, reconnect, close);
   element.onclick = () => activate(tab.id);
+  element.ondblclick = (event) => {
+    if (event.button === 0 && !event.target.closest(".close, .tab-reconnect"))
+      void reconnectTab(tab);
+  };
   element.oncontextmenu = (event) => {
     event.preventDefault();
     api.tabMenu(tab.id).catch((error) => toast(error.message));
@@ -743,26 +830,31 @@ function createTabElement(tab) {
     }
   };
   element.dataset.connection = tab.id;
-  element.title = tab.session.name + " · 可拖到其他分屏";
   element.ondragstart = (event) => {
-    if (tab.moving || event.target.closest(".close")) {
+    if (tab.moving || tab.reconnecting || event.target.closest(".close, .tab-reconnect")) {
       event.preventDefault();
       return;
     }
     event.dataTransfer.setData(terminalDragType, tab.id);
     event.dataTransfer.effectAllowed = "move";
   };
-  return { element, select };
+  return { element, select, reconnect };
 }
 function renderTabs() {
   for (const tab of tabs.values()) {
     tab.header ??= createTabElement(tab);
-    const { element, select } = tab.header;
+    const { element, select, reconnect } = tab.header;
     if (element.parentElement !== tab.group.nav) tab.group.nav.append(element);
     const visible = tab.group.shown === tab.id;
+    const disconnected = isDisconnected(tab);
     element.classList.toggle("active", visible);
+    element.classList.toggle("disconnected", disconnected);
+    element.title = `${tab.session.name} · ${tab.state} · ` +
+      (disconnected ? "点击 ↻ 或双击重新连接" : "可拖到其他分屏");
     select.setAttribute("aria-pressed", String(visible));
-    element.draggable = !tab.moving;
+    reconnect.hidden = !disconnected;
+    reconnect.disabled = tab.moving || !!tab.reconnecting;
+    element.draggable = !tab.moving && !tab.reconnecting;
   }
 }
 function fitTerminal(t) {
@@ -840,6 +932,7 @@ function closeTab(id, disconnect = true) {
   t.highlights?.dispose();
   t.passwordPrompt?.dispose();
   t.echo.dispose();
+  t.clipboardEvents.abort();
   t.term.dispose();
   t.pane.remove();
   t.header?.element.remove();
@@ -889,6 +982,7 @@ api.onEvent((m) => {
     });
   } else if (m.type === "ready") {
     t.state = "已连接";
+    renderTabs();
     fitTerminal(t);
     loadFiles(t, m.directory || ".");
     if (fileWorkspaceOpen) syncWorkspaceDirectory(t);
@@ -897,12 +991,15 @@ api.onEvent((m) => {
     t.echo.reset();
     clearCwdQuery(t);
     t.state = m.type === "closed" ? "已断开" : "连接出错";
+    renderTabs();
     quickPasswords.activate();
     if (fileWorkspaceOpen) renderWorkspaceFiles(t.group);
     t.term.writeln("\r\n\x1b[31m" + (m.message || "连接已关闭") + "\x1b[0m");
-    if (current === t.id)
+    if (current === t.id) {
+      $("#move-tab").disabled = true;
       $("#status").textContent =
         `${t.session.username}@${t.session.host} · ${t.state}`;
+    }
   } else if (m.type === "progress" && (t.transferring || t.localDragging)) {
     const text = `${m.files || 0} 个文件完成 · ${m.name?.split("/").pop() || ""} ${m.total ? Math.round((m.current / m.total) * 100) : 0}%`;
     showTransfer(t, text);

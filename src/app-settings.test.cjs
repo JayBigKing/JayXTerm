@@ -71,8 +71,10 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(initial.terminalSearchEnabled, true);
   assert.equal(initial.quickPasswordsEnabled, false);
   assert.equal(initial.predictiveEcho, true);
+  assert.equal(initial.copyOnSelect, true);
+  assert.equal(initial.ctrlVPaste, true);
   const base = { cachePath: "", saveHistory: false, fileOpen: "double" };
-  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: true, terminalSearchEnabled: true, quickPasswordsEnabled: true, predictiveEcho: false });
+  open().apply({ ...base, fontFamily: " Consolas ", cjkFontFamily: " Microsoft YaHei ", fontSize: 20, defaultEncoding: "gb2312", highlightKeywords: true, terminalSearchEnabled: true, quickPasswordsEnabled: true, predictiveEcho: false, copyOnSelect: false, ctrlVPaste: true });
   const reloaded = open();
   assert.equal(reloaded.describe().fontFamily, "Consolas");
   assert.equal(reloaded.describe().cjkFontFamily, "Microsoft YaHei");
@@ -86,29 +88,38 @@ test("terminal preferences migrate, persist, validate and survive unrelated sett
   assert.equal(open().describe().terminalSearchEnabled, true);
   assert.equal(open().describe().quickPasswordsEnabled, true);
   assert.equal(open().describe().predictiveEcho, false);
+  assert.equal(open().describe().copyOnSelect, false);
+  assert.equal(open().describe().ctrlVPaste, true);
   const previous = fs.readFileSync(file, "utf8");
   for (const invalid of [{ fontSize: 7 }, { fontSize: 49 }, { fontSize: 14.5 }, { fontSize: "20" },
     { fontFamily: "" }, { fontFamily: "   " }, { fontFamily: "bad; family" },
     { cjkFontFamily: null }, { cjkFontFamily: "   " }, { cjkFontFamily: 'bad" font' },
-    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { terminalSearchEnabled: null }, { quickPasswordsEnabled: 1 }, { predictiveEcho: "yes" }]) {
+    { defaultEncoding: "latin1" }, { highlightKeywords: "yes" }, { terminalSearchEnabled: null }, { quickPasswordsEnabled: 1 }, { predictiveEcho: "yes" },
+    { copyOnSelect: 1 }, { ctrlVPaste: "false" }]) {
     assert.throws(() => open().apply({ ...base, ...invalid }), /终端(设置|功能开关)/);
     assert.equal(fs.readFileSync(file, "utf8"), previous);
   }
-  reloaded.apply({ ...base, cjkFontFamily: "", highlightKeywords: false, terminalSearchEnabled: false, quickPasswordsEnabled: false });
+  reloaded.apply({ ...base, cjkFontFamily: "", highlightKeywords: false, terminalSearchEnabled: false, quickPasswordsEnabled: false, copyOnSelect: true, ctrlVPaste: false });
   assert.equal(open().describe().highlightKeywords, false);
   assert.equal(open().describe().terminalSearchEnabled, false);
   assert.equal(open().describe().quickPasswordsEnabled, false);
   assert.equal(open().describe().cjkFontFamily, "");
+  assert.equal(open().describe().copyOnSelect, true);
+  assert.equal(open().describe().ctrlVPaste, false);
   // Existing installations keep their chosen font and gain automatic CJK fallback.
   fs.writeFileSync(file, JSON.stringify({ fontFamily: "Consolas", fontSize: 16 }));
   assert.equal(open().describe().fontFamily, "Consolas");
   assert.equal(open().describe().cjkFontFamily, "");
   assert.equal(open().describe().highlightKeywords, true);
   assert.equal(open().describe().terminalSearchEnabled, true);
-  fs.writeFileSync(file, JSON.stringify({ fontSize: -1, fontFamily: null, defaultEncoding: "invalid" }));
+  assert.equal(open().describe().copyOnSelect, true);
+  assert.equal(open().describe().ctrlVPaste, true);
+  fs.writeFileSync(file, JSON.stringify({ fontSize: -1, fontFamily: null, defaultEncoding: "invalid", copyOnSelect: "false", ctrlVPaste: null }));
   assert.equal(open().describe().fontSize, 14);
   assert.equal(open().describe().fontFamily, "Cascadia Mono");
   assert.equal(open().describe().defaultEncoding, "utf-8");
+  assert.equal(open().describe().copyOnSelect, true);
+  assert.equal(open().describe().ctrlVPaste, true);
 });
 test("cache changes apply on restart and migrate cache folders without copying the user profile", (t) => {
   const { root, profile, open } = setup(t);

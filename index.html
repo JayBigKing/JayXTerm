@@ -189,6 +189,10 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
               <p class="form-note keyword-legend"><span class="success">Success / Passed</span><span class="error">Fail / Error</span><span class="warning">Warning / Timeout</span><span class="keyword-info">Info / Debug</span></p>
               <p class="form-note">匹配不区分大小写，支持中文成功、失败、错误、警告和超时；保留原始输出。Vim 等全屏程序使用自身配色。</p>
               <label class="check"><input name="terminalSearchEnabled" type="checkbox" />终端搜索</label>
+              <label class="check"><input name="copyOnSelect" type="checkbox" />选中文字自动复制</label>
+              <p class="form-note">在终端中用鼠标选中文字，松开后自动复制，并在右下角短暂显示字符数。</p>
+              <label class="check"><input name="ctrlVPaste" type="checkbox" />Ctrl+V 粘贴文本</label>
+              <p class="form-note">将剪贴板中的文本粘贴到当前终端。关闭后，Ctrl+V 交给远端程序处理，例如 Vim 的可视块模式。</p>
               <label class="check"><input id="settings-predictive-echo" name="predictiveEcho" type="checkbox" checked />预测输入回显</label>
               <p class="form-note">网络较慢时提前显示已确认回显的普通英文命令输入；密码、中文输入和全屏程序保持远端回显。</p>
             </section>
@@ -395,6 +399,7 @@ ABC xyz 0123456789 │ 中文字体预览，。！？</pre>
       <div class="dialog-actions"><button id="windows-close">关闭</button></div>
     </dialog>
     <div id="toast" role="status"></div>
+    <div id="clipboard-notice" role="status" aria-atomic="true" hidden></div>
     <script type="module" src="/src/renderer.js"></script>
   </body>
 </html>
