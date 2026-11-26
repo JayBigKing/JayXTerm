@@ -6,12 +6,6 @@
 - 新建连接、连接测试和 SFTP 请求在后台退出后立即拒绝，不创建等待中的连接或超时任务；后台退出时同步更新主进程的连接状态。
 - `npm test` 的 41 项测试、`npm run build` 及扩展 Electron smoke 通过。smoke 启用 `JAYXTERM_WORKSPACE_QA=1 JAYXTERM_MULTIWINDOW_QA=1 JAYXTERM_CLIPBOARD_QA=1 JAYXTERM_FEATURES_QA=1`，覆盖分屏、多窗口、剪贴板、复制会话和常规重连；后台退出检查已纳入常规 smoke 的最后阶段。Windows 实机未在本次本地验证中运行。
 
-## 2026-11-26：TUN 重启后保留屏蔽
-
-- 先用新回归复现清单缺失、空文件、全无效三种情况下，TUN 开启时重启守护会清空已有 hosts 屏蔽。
-- 将有效清单检查放在 TUN 放行之前；没有可恢复的清单时保留已有屏蔽，有内存清单或恢复有效文件后继续正常切换。
-- `/bin/bash -n scripts/tun-guard.sh` 及 `python3 scripts/tun-guard-check.py` 的 9 项测试通过。测试以独立 Bash 进程模拟重启，使用临时 hosts 和模拟 TUN 状态，不修改系统 hosts 或 DNS。
-
 ## 2026-11-25：终端断线重连
 
 - `npm test` 的 41 项测试及 `npm run build` 通过。
