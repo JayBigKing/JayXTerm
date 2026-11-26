@@ -44,8 +44,12 @@ async function check(win, fixture) {
   };
   const seeLine = line => run(`await wait(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')]
     .some(row => row.textContent.trim() === ${JSON.stringify(line)}));`);
-  const seeLastLine = line => run(`await wait(() => [...document.querySelectorAll('.terminal-pane.active .xterm-rows > div')]
-    .map(row => row.textContent.trim()).filter(Boolean).at(-1) === ${JSON.stringify(line)});`);
+  const seePtyMarker = (marker, after = "") => run(`await wait(() => {
+    const output = window.__localInterruptProbe.output;
+    const after = ${JSON.stringify(after)};
+    const index = after ? output.lastIndexOf(after) : 0;
+    return index >= 0 && output.includes(${JSON.stringify(marker)}, index + after.length);
+  });`);
   const zoom = win.webContents.getZoomFactor();
   const localShortcut = '[data-shortcut="openLocalTerminal"]';
   const openShortcuts = async () => run(`$('#settings-open').click();
@@ -74,28 +78,32 @@ async function check(win, fixture) {
       await seeLine(dimensions);
       win.webContents.setZoomFactor(zoom);
     }
-    // Let the foreground process acknowledge readiness after installing its
-    // handler. Keep follow-up input out of the PTY until the Shell resumes.
+    // Match markers in the PTY stream so line wrapping and prompt redraws
+    // cannot change the result of the foreground-process check.
+    await run(`const id = $('.tab.active').dataset.connection;
+      const probe = { output: '' };
+      probe.stop = api.localTerminal.onEvent(event => {
+        if (event.id === id && event.type === 'data') probe.output = (probe.output + event.data).slice(-8192);
+      });
+      window.__localInterruptProbe = probe;`);
     const interruptProbe = "const timer = setTimeout(() => { process.exitCode = 1; }, 25000); " +
       "process.once('SIGINT', () => { clearTimeout(timer); process.stdout.write('\\nJAYXTERM_' + 'INTERRUPTED\\n'); }); " +
       "console.log('JAYXTERM_' + 'INTERRUPT_READY');";
     const resumed = cmd ? "echo JAYXTERM_%OS%_RESUMED" : "printf '%s%s\\n' JAYXTERM_ RESUMED";
-    const windows = process.platform === "win32";
-    const prompt = "JAYXTERM_QA_PROMPT";
-    if (windows) {
-      await enter(cmd ? `prompt ${prompt}$G` : `unset PROMPT_COMMAND; PS1='${prompt}> '`);
-      await seeLastLine(`${prompt}>`);
-    }
-    await enter(`node -e "${interruptProbe}"${windows ? "" : ` && ${resumed}`}`);
-    await seeLine("JAYXTERM_INTERRUPT_READY");
+    const prompt = "JAYXTERM_QA_PROMPT>";
+    const interrupted = "JAYXTERM_INTERRUPTED";
+    const resumedMarker = cmd ? "JAYXTERM_Windows_NT_RESUMED" : "JAYXTERM_RESUMED";
+    await enter(cmd ? "prompt JAYXTERM_QA_PROMPT$G" : "unset PROMPT_COMMAND; PS1='JAYXTERM_QA_''PROMPT> '");
+    await seePtyMarker(prompt);
+    await enter(`node -e "${interruptProbe}"`);
+    await seePtyMarker("JAYXTERM_INTERRUPT_READY");
     keystroke("C", ["control"]);
-    await seeLine("JAYXTERM_INTERRUPTED");
-    if (windows) {
-      // Git Bash cancels the remaining command list after Ctrl+C.
-      await seeLastLine(`${prompt}>`);
-      await enter(resumed);
-    }
-    await seeLine(cmd ? "JAYXTERM_Windows_NT_RESUMED" : "JAYXTERM_RESUMED");
+    // Bash can cancel a command list after Ctrl+C. Wait for the prompt
+    // before typing a separate command to verify the shell still accepts input.
+    await seePtyMarker(prompt, interrupted);
+    await enter(resumed);
+    await seePtyMarker(prompt, resumedMarker);
+    await run("window.__localInterruptProbe.stop(); delete window.__localInterruptProbe;");
     assert.equal(fixture.inputs.length, remoteInputCount, "Local input must stay out of SSH");
     await enter("exit");
     await run("await wait(() => $('#status').textContent.endsWith('已退出'));");
@@ -159,6 +167,7 @@ async function check(win, fixture) {
   } finally {
     win.webContents.setZoomFactor(zoom);
     await run(`if ($('#settings-dialog').open) $('#settings-cancel').click();
+      window.__localInterruptProbe?.stop(); delete window.__localInterruptProbe;
       const saved = await api.settings();
       await api.applySettings({ ...saved, cachePath: saved.pendingCache ?? saved.cachePath, shortcuts: ${JSON.stringify(beforeShortcuts)} });
       await api.localTerminal.setDefault(${JSON.stringify(before.preferred)});
